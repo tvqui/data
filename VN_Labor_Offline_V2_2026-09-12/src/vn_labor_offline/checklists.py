@@ -21,6 +21,7 @@ def heuristic_checklist(provision: dict) -> list[dict]:
         s=" ".join(sent.split()).strip()
         if len(s) < 18 or len(s) > 700: continue
         low=s.lower()
+        if re.search(r'(?:nếu|khi).*vướng mắc|phản ánh.*về Bộ',low): continue
         typ=None
         for t, kws in TRIGGERS:
             if any(k in low for k in kws): typ=t; break
@@ -58,6 +59,8 @@ Nguồn:
     data=json.loads(resp.message.content)
     out=[]
     for i,it in enumerate(data.get("items",[])[:20],1):
+        evidence=it.get('source_text','')
+        if not evidence or ' '.join(evidence.split()) not in ' '.join(provision.get('text','').split()): continue
         out.append({
             "checklist_id": stable_id(provision["provision_id"], str(i), it.get("source_text",""), prefix="diag"),
             "provision_id": provision["provision_id"], "type": it.get("type","CONDITION"),
@@ -72,7 +75,7 @@ def build_checklists(provisions: list[dict], cfg: dict, output_dir: Path, mode: 
     model = cfg["knowledge"].get("ollama_model", "qwen3:4b")
     rows=[]
     for p in provisions:
-        # Prefer the finest available legal unit but do not generate on tiny fragments.
+        # Parser stores each level's own text; ancestor introductions can contain rules too.
         if len(p.get("text", "")) < 40: continue
         if mode == "ollama":
             try: rows.extend(ollama_checklist(p, model))

@@ -5,7 +5,7 @@ extraction:
   min_text_chars_before_ocr: 1200
   use_docling: auto        # auto | always | never
   ocr_languages: ["vi", "en"]
-  ocr_use_gpu: false       # RTX 3050 Ti 4GB: CPU OCR is safer/stabler
+  ocr_use_gpu: true       # RTX 3050 Ti 4GB: CPU OCR is safer/stabler
   document_timeout_seconds: 180
 
 cleaning:

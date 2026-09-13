@@ -12,6 +12,7 @@ def main():
     pa=sub.add_parser('all'); pa.add_argument('--config',default='config/pipeline.yaml'); pa.add_argument('--mode',choices=['heuristic','ollama'],default=None)
     pe=sub.add_parser('enrich'); pe.add_argument('--config',default='config/pipeline.yaml'); pe.add_argument('--mode',choices=['heuristic','ollama'],default='ollama')
     pn=sub.add_parser('load-neo4j'); pn.add_argument('--config',default='config/pipeline.yaml')
+    pn.add_argument('--replace-legacy',action='store_true',help='Explicit migration: remove unowned Entity nodes in this dedicated database')
     pd=sub.add_parser('dense'); pd.add_argument('--config',default='config/pipeline.yaml')
     args=p.parse_args()
     cfg=resolve_paths(load_yaml(args.config),args.config)
@@ -20,7 +21,7 @@ def main():
     elif args.cmd=='enrich':
         summary=rerun_enrichment(cfg,args.mode); print(json.dumps(summary,ensure_ascii=False,indent=2))
     elif args.cmd=='load-neo4j':
-        load_neo4j(cfg['output_dir'],int(cfg['neo4j'].get('load_batch_size',500)))
+        load_neo4j(cfg['output_dir'],int(cfg['neo4j'].get('load_batch_size',500)),replace_legacy=args.replace_legacy)
         print('Neo4j load complete.')
     elif args.cmd=='dense':
         from .indexes import build_dense_index

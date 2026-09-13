@@ -16,7 +16,13 @@ ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / "artifacts"
 
 
-def audit(check_neo4j=False):
+def audit(check_neo4j=False, output_dir=None, config_path=None):
+    from vn_labor_offline.config import load_yaml, resolve_paths
+    from vn_labor_offline.quality import quality_issues
+    from vn_labor_offline.evaluation import reviewed_quality_gate
+    config_path = config_path or ROOT / 'config/pipeline.yaml'
+    cfg = resolve_paths(load_yaml(config_path), config_path)
+    OUT = Path(output_dir).resolve() if output_dir else cfg['output_dir']
     checks = []
 
     def check(stage, name, ok, detail=""):
@@ -111,6 +117,9 @@ def audit(check_neo4j=False):
         check("indexes", "BM25 load/query", False, str(exc))
     validation = rows("reports/validation_issues.jsonl", "graph", allow_empty=True)
     check("graph", "pipeline validation has no ERROR", not any(i.get("severity") == "ERROR" for i in validation))
+    semantic = quality_issues(registry, extracted, provisions, nodes, edges, OUT, cfg)
+    semantic_counts = dict(Counter(i['type'] for i in semantic if i.get('severity') == 'ERROR'))
+    check('graph', 'current semantic validation', not semantic_counts, json.dumps(semantic_counts))
     if check_neo4j:
         try:
             import os
@@ -121,15 +130,17 @@ def audit(check_neo4j=False):
                 db = os.getenv("NEO4J_DATABASE", "neo4j")
                 records, _, _ = driver.execute_query("MATCH (n:Entity) RETURN n.id AS id", database_=db)
                 actual = {r["id"] for r in records}
-                check("indexes", "Neo4j node coverage", bool(node_ids) and node_ids <= actual)
+                check("indexes", "Neo4j node coverage", bool(node_ids) and node_ids == actual and len(records)==len(node_ids))
                 records, _, _ = driver.execute_query("MATCH (:Entity)-[r]->(:Entity) RETURN r.id AS id", database_=db)
-                check("indexes", "Neo4j edge coverage", bool(edges) and {e["id"] for e in edges} <= {r["id"] for r in records})
+                check("indexes", "Neo4j edge coverage", bool(edges) and {e["id"] for e in edges} == {r["id"] for r in records} and len(records)==len(edges))
         except Exception as exc:
             check("indexes", "Neo4j live verification", False, str(exc))
     else:
         check("indexes", "Neo4j live verification", False, "Not requested; rerun with --neo4j to verify Graph DB.")
     stages = {stage: all(c["passed"] for c in checks if c["stage"] == stage) for stage in ("registry", "structure", "graph", "indexes")}
     report = dict(checked_at=datetime.now(timezone.utc).isoformat(), ready_for_offline_v1=all(stages.values()), stages=stages, checks=checks, metadata_gaps=metadata_gaps)
+    report['legal_quality_evaluation'] = reviewed_quality_gate(OUT, nodes, edges)
+    report['offline_ready_for_online'] = report['ready_for_offline_v1'] and report['legal_quality_evaluation']['passed']
     report_dir = OUT / "reports"
     report_dir.mkdir(parents=True, exist_ok=True)
     (report_dir / "final_outputs_validation.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -144,7 +155,9 @@ def audit(check_neo4j=False):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--neo4j", action="store_true")
+    parser.add_argument('--output', type=Path, help='Audit an isolated artifact directory')
+    parser.add_argument('--config', type=Path, default=ROOT / 'config/pipeline.yaml')
     args = parser.parse_args()
-    result = audit(args.neo4j)
+    result = audit(args.neo4j, args.output, args.config)
     print(json.dumps({"ready_for_offline_v1": result["ready_for_offline_v1"], "stages": result["stages"]}, indent=2))
     sys.exit(0 if result["ready_for_offline_v1"] else 1)

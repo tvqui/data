@@ -1,0 +1,28 @@
+# Curated source metadata. Unknown values remain unresolved; SHA binds entries to files.
+sources:
+  legal_corpus/circulars/06-2020-TT-BLDTBXH_Cong-viec-nghiem-ngat-ATVSLD.pdf:
+    issuer: Bộ Lao động - Thương binh và Xã hội
+    instrument_type: CIRCULAR
+    metadata_verified: true
+    temporal_verified: true
+    status_checked_at: '2026-09-13'
+    sha256: 66a2ad19e6b8cdaa8ee6bf3e4cc32765a206d2f007ac8c89af65f4cab51de5fe
+    instrument_number: 06/2020/TT-BLĐTBXH
+    title: Ban hành Danh mục công việc có yêu cầu nghiêm ngặt về an toàn, vệ sinh lao động
+    promulgated_date: '2020-08-20'
+    effective_from: '2020-10-05'
+    legal_status: EFFECTIVE
+    source_url: https://vbpl.vn/TW/Pages/vbpq-thuoctinh.aspx?ItemID=143667
+  legal_corpus/circulars/08-2023-TT-BLDTBXH_Sua-doi-thu-tuc-cu-tru.pdf:
+    issuer: Bộ Lao động - Thương binh và Xã hội
+    instrument_type: CIRCULAR
+    # Dates/issuer checked; full title and amendment scope still require review.
+    metadata_verified: false
+    temporal_verified: false
+    status_checked_at: '2026-09-13'
+    sha256: 8cd13c18fcdd6d88e442bc7c6ff2af25601c026fd60a570f72fa0890b0fac5b8
+    instrument_number: 08/2023/TT-BLĐTBXH
+    promulgated_date: '2023-08-29'
+    effective_from: '2023-10-12'
+    legal_status: PARTIALLY_EXPIRED
+    source_url: https://vbpl.vn/TW/Pages/vbpq-lichsu.aspx?ItemID=167031

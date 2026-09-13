@@ -1,7 +1,8 @@
 from __future__ import annotations
 import json, csv, re, unicodedata
 from pathlib import Path
-from .util import stable_id, write_jsonl
+from .util import stable_id, write_jsonl, read_jsonl
+from .temporal import instrument_key, instrument_id
 
 
 def node(nid: str, label: str, **props):
@@ -13,15 +14,7 @@ def edge(s: str, t: str, typ: str, **props):
 
 
 def abstract_law_key(d: dict) -> str:
-    title = (d.get("title") or "").lower()
-    # Strip administrative wrappers and numbers while preserving the legal instrument name.
-    title = re.sub(r"văn bản hợp nhất|van ban hop nhat", "", title)
-    title = re.sub(r"\b\d{1,4}[/_-]\d{4}[/_-][a-zđ0-9_-]+\b", "", title, flags=re.I)
-    title = re.sub(r"\s+", " ", title).strip(" -_:.,")
-    # For poor OCR titles, fall back to document number so we never merge unrelated laws.
-    if len(title) < 8:
-        title = d.get("document_number") or d.get("document_id")
-    return title
+    return instrument_key(d)
 
 
 def build_graph(registry, provisions, cases, issues, issue_edges, checklists, relation_edges, communities, output_dir: Path):
@@ -36,13 +29,22 @@ def build_graph(registry, provisions, cases, issues, issue_edges, checklists, re
         elif d["source_group"] == "SUPPLEMENTARY": label="SupplementaryDocument"
         props = dict(d); props["layer"] = "document"
         nodes.append(node(d["document_id"], label, **props))
-        if d["source_group"] == "LEGAL_DOCUMENT" or d["document_type"] == "CONSOLIDATED":
+        if d.get('instrument_number') and (d["source_group"] == "LEGAL_DOCUMENT" or d["document_type"] == "CONSOLIDATED"):
             key = abstract_law_key(d)
-            aid = stable_id(key, prefix="law")
+            aid = instrument_id(d)
             if aid not in abstract_seen:
                 abstract_seen[aid] = True
-                nodes.append(node(aid, "AbstractLaw", canonical_key=key, layer="rule"))
+                nodes.append(node(aid, "LegalInstrument", canonical_key=key, instrument_number=d['instrument_number'], layer="rule"))
             edges.append(edge(d["document_id"], aid, "VERSION_OF"))
+        if d.get('policy_series'):
+            sid=stable_id(d['policy_series'],prefix='policy')
+            if sid not in abstract_seen:
+                nodes.append(node(sid,'PolicySeries',name=d['policy_series'],layer='ontology')); abstract_seen[sid]=True
+            edges.append(edge(d['document_id'],sid,'BELONGS_TO_POLICY_SERIES'))
+    for s in read_jsonl(output_dir/'03_structure'/'segments.jsonl'):
+        if s['segment_type'] in {'ANNEX','FORM','ATTACHED_REGULATION'}:
+            nodes.append(node(s['segment_id'],{'FORM':'Form','ANNEX':'Annex','ATTACHED_REGULATION':'AttachedRegulation'}[s['segment_type']],layer='document',**s))
+            edges.append(edge(s['segment_id'],s['document_id'],'PART_OF'))
     # Natural legal hierarchy
     for p in provisions:
         label={"ARTICLE":"Article","CLAUSE":"Clause","POINT":"Point"}.get(p["level"],"Provision")
@@ -77,10 +79,10 @@ def build_graph(registry, provisions, cases, issues, issue_edges, checklists, re
     for c in communities.get("community_nodes",[]): nodes.append(node(c["id"],"Community",layer="ontology",**c))
     for e in communities.get("edges",[]): edges.append(edge(e["source"],e["target"],e["type"],**e.get("properties",{})))
 
-    # Deduplicate ids.
-    nodes={n["id"]:n for n in nodes}
-    edges={e["id"]:e for e in edges if e["source"] in nodes and e["target"] in nodes}
-    nodes=list(nodes.values()); edges=list(edges.values())
+    if len({n['id'] for n in nodes})!=len(nodes):
+        raise ValueError('Duplicate graph node IDs; refusing to overwrite legal content.')
+    # Keep dangling edges visible to validation instead of silently deleting them.
+    edges=list({e['id']:e for e in edges}.values())
     gdir=output_dir/"05_graph"; gdir.mkdir(parents=True,exist_ok=True)
     write_jsonl(gdir/"nodes.jsonl",nodes); write_jsonl(gdir/"edges.jsonl",edges)
     # CSV exports with JSON properties are convenient for inspection and import.

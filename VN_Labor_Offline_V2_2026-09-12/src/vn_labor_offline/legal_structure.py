@@ -1,9 +1,10 @@
 from __future__ import annotations
 import re
+from collections import Counter
 from pathlib import Path
 from .util import stable_id, write_jsonl
 
-ARTICLE_RE = re.compile(r"^\s*(?:Điều|ĐIỀU)\s+(\d+[a-zA-ZĐđ]?)\s*[\.:]?\s*(.*)$")
+ARTICLE_RE = re.compile(r"^\s*(?:Điều|ĐIỀU)\s+(\d+[a-zA-ZĐđ]?)\s*(?:[\.:]\s*(.*)|$)")
 CLAUSE_RE = re.compile(r"^\s*(\d+)\s*[\.)]\s+(.+)$")
 POINT_RE = re.compile(r"^\s*([a-zA-ZđĐ])\s*[\)\.]\s+(.+)$")
 CHAPTER_RE = re.compile(r"^\s*(?:Chương|CHƯƠNG)\s+([IVXLCDM\d]+)\s*$")
@@ -14,7 +15,7 @@ def _join(lines: list[str]) -> str:
     return "\n".join(x for x in lines if x is not None).strip()
 
 
-def parse_legal_document(doc: dict, text: str) -> list[dict]:
+def _parse_main_body(doc: dict, text: str) -> list[dict]:
     lines = text.splitlines()
     articles: list[dict] = []
     current_article = None
@@ -22,6 +23,7 @@ def parse_legal_document(doc: dict, text: str) -> list[dict]:
     current_point = None
     chapter = ""; section = ""
     order = 0
+    quoted=False
 
     def finish_point():
         nonlocal current_point
@@ -49,6 +51,11 @@ def parse_legal_document(doc: dict, text: str) -> list[dict]:
     for line in lines:
         s = line.strip()
         if not s: continue
+        if quoted or re.match(r'^[“"](?:Điều\s+\d|\d+[.)])',s):
+            target=current_point or current_clause or current_article
+            if target: target['_lines'].append(s)
+            quoted=not (s.endswith('”') or s.endswith('”;') or s.endswith('”.') or s.endswith('";') or s.endswith('".'))
+            continue
         m = CHAPTER_RE.match(s)
         if m: chapter = m.group(1); continue
         m = SECTION_RE.match(s)
@@ -56,7 +63,7 @@ def parse_legal_document(doc: dict, text: str) -> list[dict]:
         m = ARTICLE_RE.match(s)
         if m:
             finish_article(); order += 1
-            no, heading = m.group(1), m.group(2).strip()
+            no, heading = m.group(1), (m.group(2) or '').strip()
             current_article = {"number": no, "heading": heading, "_lines": [s], "clauses": [], "chapter": chapter, "section": section, "order": order}
             continue
         if current_article:
@@ -101,13 +108,50 @@ def parse_legal_document(doc: dict, text: str) -> list[dict]:
     return provisions
 
 
-def parse_all(registry: list[dict], extracted: list[dict], output_dir: Path) -> list[dict]:
+def parse_legal_document(doc: dict, text: str) -> list[dict]:
+    from .segmentation import segment_document
+    result=[]; preamble=''
+    for segment in segment_document(doc,text):
+        if segment['segment_type']=='PREAMBLE': preamble=segment['text']
+        if segment['segment_type']!='MAIN_BODY': continue
+        chapter_lines=[line for line in preamble.splitlines() if CHAPTER_RE.match(line) or SECTION_RE.match(line)]
+        parsed=_parse_main_body(doc,'\n'.join(chapter_lines[-2:])+'\n'+segment['text'])
+        for p in parsed:
+            p['segment_id']=segment['segment_id']; p['segment_type']='MAIN_BODY'
+            p['article_number']=p['number'] if p['level']=='ARTICLE' else p.get('article_number','')
+            p['clause_number']=p['number'] if p['level']=='CLAUSE' else p.get('clause_number','')
+            p['point_number']=p['number'] if p['level']=='POINT' else ''
+            p['canonical_path']='/'.join(str(x) for x in [p['document_id'],'MAIN_BODY',p['article_number'],p['clause_number'],p['point_number']] if x)
+        result.extend(parsed)
+    return result
+
+
+def parse_all(registry: list[dict], extracted: list[dict], output_dir: Path, cfg: dict | None=None) -> list[dict]:
+    from .segmentation import segment_document
+    settings=(cfg or {}).get('parsing',{})
     by_file = {x["file_id"]: x for x in extracted}
-    rows = []
+    rows = []; segments=[]; problems=[]; quarantined=[]
     for doc in registry:
         if doc["document_type"] not in {"LAW", "DECREE", "CIRCULAR", "RESOLUTION", "CONSOLIDATED", "HISTORICAL"}:
             continue
         text = by_file.get(doc["file_id"], {}).get("text", "")
-        rows.extend(parse_legal_document(doc, text))
+        parts=segment_document(doc,text,settings.get('keep_unparsed_preamble',True))
+        segments.extend(parts)
+        parsed=parse_legal_document(doc,text)
+        repeated=[key for key,count in Counter(p['provision_id'] for p in parsed).items() if count>1]
+        if repeated:
+            problems.append({'severity':'ERROR','type':'AMBIGUOUS_CANONICAL_PATH','document_id':doc['document_id'],'duplicate_ids':repeated})
+            quarantined.extend(parsed)
+            continue
+        for p in parsed:
+            if len(p['text'])<int(settings.get('minimum_provision_chars',10)):
+                problems.append({'severity':'ERROR','type':'SHORT_PROVISION','provision_id':p['provision_id']})
+        for part in parts:
+            if part['segment_type']=='ATTACHED_REGULATION':
+                problems.append({'severity':'ERROR','type':'ATTACHED_REGULATION_REQUIRES_REVIEW','segment_id':part['segment_id']})
+        rows.extend(parsed)
+    write_jsonl(output_dir/'03_structure'/'segments.jsonl',segments)
+    write_jsonl(output_dir/'03_structure'/'quarantined_provisions.jsonl',quarantined)
+    write_jsonl(output_dir/'reports'/'parsing_issues.jsonl',problems)
     write_jsonl(output_dir / "03_structure" / "provisions.jsonl", rows)
     return rows

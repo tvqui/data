@@ -5,28 +5,54 @@ import numpy as np
 from .util import write_jsonl
 
 
-def build_retrieval_units(provisions: list[dict], cases: list[dict], registry: list[dict]) -> list[dict]:
+def build_retrieval_units(provisions: list[dict], cases: list[dict], registry: list[dict], segments=None) -> list[dict]:
     children=set(p["parent_id"] for p in provisions)
     docs={d["document_id"]:d for d in registry}
+    by_id={p['provision_id']:p for p in provisions}
+    def metadata(d):
+        return {k:d.get(k) for k in ('source_url','legal_status','binding','version_id','version_role','instrument_id','instrument_number',
+            'issuer','authority_rank','language','provenance','temporal_verified','effective_from','effective_to','consolidation_as_of','promulgated_date')}
     units=[]
     # Leaf provisions are the natural retrieval units; metadata keeps full hierarchy.
     for p in provisions:
-        if p["provision_id"] in children:
-            continue
+        # Ancestors contain their own introductory rules, not duplicated descendant text.
+        # Keep meaningful own text even when a provision also has children.
         d=docs.get(p["document_id"],{})
+        ancestors=[]; current=p; seen=set()
+        while current and current['provision_id'] not in seen:
+            seen.add(current['provision_id']); ancestors.append(current)
+            current=by_id.get(current.get('parent_id'))
+        ancestors.reverse()
+        labels={'ARTICLE':'Điều','CLAUSE':'Khoản','POINT':'Điểm'}
+        chapter=next((a.get('chapter') for a in ancestors if a.get('chapter')),'')
+        breadcrumb=' > '.join([str(d.get('title','')),str(d.get('instrument_number') or d.get('document_number',''))]+([f'Chương {chapter}'] if chapter else [])+
+            [f"{labels.get(a['level'],a['level'])} {a['number']}"+(f" — {a['heading']}" if a.get('heading') else '') for a in ancestors])
+        ancestor_text='\n'.join(a.get('text','')[:1500] for a in ancestors[:-1])
         units.append({
-            "unit_id":p["provision_id"], "kind":"PROVISION", "text":p.get("text",""),
+            **metadata(d),"unit_id":p["provision_id"], "kind":"PROVISION", "text":breadcrumb+'\n'+ancestor_text+'\n'+p.get("text",""),
+            'ancestor_context':ancestor_text,
+            'source_text':p.get('text',''),'breadcrumb':breadcrumb,'segment_type':p.get('segment_type','MAIN_BODY'),
+            'article_number':p.get('article_number',''),'clause_number':p.get('clause_number',''),'point_number':p.get('point_number',''),
             "document_id":p["document_id"], "level":p["level"], "number":p["number"],
             "document_number":d.get("document_number",""), "document_title":d.get("title",""),
             "effective_from":d.get("effective_from",""), "effective_to":d.get("effective_to",""),
         })
     for c in cases:
+        d=docs.get(c['document_id'],{})
         units.append({
-            "unit_id":c["case_id"], "kind":"CASE", "text":c.get("search_text","")[:30000],
+            **metadata(d),"unit_id":c["case_id"], "kind":"CASE", "text":c.get("search_text","")[:30000],
+            'breadcrumb':c.get('case_number') or c['case_id'],'segment_type':'JUDICIAL',
             "document_id":c["document_id"], "case_number":c.get("case_number",""),
             "case_type":c.get("case_type",""), "decision_date":c.get("decision_date",""),
         })
-    return [u for u in units if len(u.get("text","").strip()) >= 20]
+    for s in segments or []:
+        if s['segment_type'] not in {'ANNEX','FORM','ATTACHED_REGULATION'}: continue
+        d=docs.get(s['document_id'],{}); breadcrumb=f"{d.get('title','')} > {s['heading']}"
+        units.append({**metadata(d),'unit_id':s['segment_id'],'kind':s['segment_type'],'document_id':s['document_id'],
+            'text':breadcrumb+'\n'+s['text'],'source_text':s['text'],'breadcrumb':breadcrumb,'segment_type':s['segment_type']})
+    units=[u for u in units if len(u.get('source_text',u.get('text','')).strip())>=20]
+    if len({u['unit_id'] for u in units})!=len(units): raise ValueError('Duplicate retrieval unit IDs')
+    return units
 
 
 def build_dense_index(units: list[dict], cfg: dict, output_dir: Path) -> dict[str,np.ndarray]:

@@ -69,7 +69,7 @@ Document → Article → Clause → Point
 Knowledge enrichment
   ├─ LegalIssue ontology
   ├─ Diagnostic Checklist
-  ├─ REFERENCES / AMENDS / REPEALS / REPLACES / IMPLEMENTS
+  ├─ REFERENCES / AMENDS / REPEALS / REPLACES (conservative resolution)
   ├─ Case facts + citations
   └─ kNN + Leiden/Louvain case communities
         ↓
@@ -162,7 +162,7 @@ Sau đó mở `http://localhost:7474`.
 
 ### Document / temporal
 
-- `AbstractLaw`
+- `LegalInstrument` (identity by instrument number; `PolicySeries` only when curated)
 - `DocumentVersion`
 - `ConsolidatedDocumentVersion`
 - `VERSION_OF`
@@ -233,3 +233,22 @@ Bản `data(2).zip` mới nhất có 96 file và đã đủ để **bắt đầu
 - Excluded `SOURCE_AUTHORITY.json` sidecar metadata from the retrievable document corpus.
 - Batch files are ASCII/no-BOM to avoid the Windows `∩╗┐@echo` error.
 - Smoke-tested the exact corpus with OCR disabled; full mode is expected to resolve scan-heavy documents via Docling/EasyOCR.
+
+## Rà soát và sửa cơ chế dữ liệu (13/09/2026)
+
+Xem [REVIEW_AND_FIXES.md](REVIEW_AND_FIXES.md) để biết lỗi đã sửa, kết quả rà soát và phần còn cần xác minh.
+Metadata đã kiểm chứng được khai báo trong `config/source_catalog.yaml` theo đường dẫn và SHA256.
+Segmentation ghi vào `03_structure/segments.jsonl`; các tài liệu có canonical path trùng được
+cách ly tại `03_structure/quarantined_provisions.jsonl` và vẫn làm validation FAIL.
+
+Chạy kiểm thử và rà soát riêng (không ghi đè index/DB chính):
+
+```powershell
+.venv/Scripts/python.exe -m unittest discover -s tests -v
+.venv/Scripts/python.exe scripts/review_existing_extraction.py --refresh-native
+.venv/Scripts/python.exe scripts/validate_outputs.py --output artifacts/review_v3
+```
+
+Bản rà soát tắt OCR và không xây index nên chưa thể PASS toàn bộ. Pipeline chính hiện OCR theo trang,
+lưu graph trước Dense và yêu cầu kiểm tra metadata, index freshness, bản nạp Neo4j.
+`offline_ready_for_online` còn yêu cầu đánh giá citation/retrieval độc lập đã duyệt trên đúng build.

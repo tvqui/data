@@ -4,6 +4,9 @@ from .util import stable_id
 
 
 def build_case_communities(cases: list[dict], embeddings: dict[str,np.ndarray], cfg: dict) -> dict:
+    requested=cfg['retrieval'].get('community_algorithm','leiden')
+    if requested not in {'leiden','louvain','none'}: raise ValueError('Unsupported community_algorithm')
+    if requested=='none': return {'community_nodes':[],'edges':[],'algorithm':'disabled'}
     usable=[c for c in cases if c["case_id"] in embeddings]
     if len(usable) < 3:
         return {"community_nodes":[],"edges":[],"algorithm":"skipped"}
@@ -21,6 +24,7 @@ def build_case_communities(cases: list[dict], embeddings: dict[str,np.ndarray], 
     labels={}
     algo="leiden"
     try:
+        if requested=='louvain': raise ImportError('Louvain requested')
         import igraph as ig
         import leidenalg
         ids=[c["case_id"] for c in usable]; pos={x:i for i,x in enumerate(ids)}

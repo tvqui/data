@@ -46,7 +46,7 @@ def split_sections(text: str) -> dict:
 def parse_case(doc: dict, text: str) -> dict:
     head = text[:7000]
     m = CASE_NO_RE.search(head)
-    case_no = m.group(1).upper() if m else ""
+    case_no = doc.get('case_number') or (m.group(1).upper() if m else "")
     date = ""
     for pat in DATE_PATTERNS:
         dm = pat.search(head)

@@ -5,7 +5,7 @@ from pathlib import Path
 from .util import write_jsonl
 
 
-def validate(registry, extracted, provisions, cases, checklists, graph_nodes, graph_edges, output_dir: Path) -> dict:
+def validate(registry, extracted, provisions, cases, checklists, graph_nodes, graph_edges, output_dir: Path, cfg=None) -> dict:
     issues=[]
     by_file={x['file_id']:x for x in extracted}
     for d in registry:
@@ -43,7 +43,7 @@ def validate(registry, extracted, provisions, cases, checklists, graph_nodes, gr
         issues.append({'severity':'INFO','type':'CASE_CORPUS_SMALL','message':f'{len(cases)} judicial items; enough for pipeline development, expand before evaluation.'})
     node_ids={n['id'] for n in graph_nodes}
     bad_edges=[e for e in graph_edges if e['source'] not in node_ids or e['target'] not in node_ids]
-    for e in bad_edges[:100]: issues.append({'severity':'ERROR','type':'DANGLING_EDGE','edge_id':e['id']})
+    for e in bad_edges: issues.append({'severity':'ERROR','type':'DANGLING_EDGE','edge_id':e['id']})
     for kind, names in {
         'DENSE': ['06_indexes/dense/faiss.index', '06_indexes/dense/vectors.npy', '06_indexes/dense/metadata.jsonl'],
         'BM25': ['06_indexes/bm25/params.index.json', '06_indexes/bm25/corpus.jsonl'],
@@ -51,6 +51,8 @@ def validate(registry, extracted, provisions, cases, checklists, graph_nodes, gr
         missing=[name for name in names if not (output_dir/name).is_file() or (output_dir/name).stat().st_size == 0]
         if missing:
             issues.append({'severity':'ERROR','type':f'MISSING_{kind}_INDEX','paths':missing})
+    from .quality import quality_issues
+    issues.extend(quality_issues(registry,extracted,provisions,graph_nodes,graph_edges,output_dir,cfg))
     summary={
         'documents':len(registry),'provisions':len(provisions),'cases':len(cases),'diagnostic_items':len(checklists),
         'graph_nodes':len(graph_nodes),'graph_edges':len(graph_edges),
@@ -58,6 +60,11 @@ def validate(registry, extracted, provisions, cases, checklists, graph_nodes, gr
         'ready_for_offline_v1': bool(registry and provisions and graph_nodes and graph_edges) and not any(i['severity']=='ERROR' or i['type'] in {'MISSING_EFFECTIVE_FROM','UNKNOWN_LEGAL_STATUS'} for i in issues),
         'note':'This checks local construction only. Run scripts/validate_outputs.py --neo4j for index queries and live Graph DB verification. Temporal QA coverage also depends on historical corpus completeness.'
     }
+    # Technical smoke tests are not a gold-standard legal retrieval evaluation.
+    from .evaluation import reviewed_quality_gate
+    evaluation=reviewed_quality_gate(output_dir,graph_nodes,graph_edges)
+    summary['offline_ready_for_online']=summary['ready_for_offline_v1'] and evaluation['passed']
+    summary['legal_quality_evaluation']=evaluation
     rdir=output_dir/'reports'; rdir.mkdir(parents=True,exist_ok=True)
     write_jsonl(rdir/'validation_issues.jsonl',issues)
     (rdir/'summary.json').write_text(json.dumps(summary,ensure_ascii=False,indent=2),encoding='utf-8')
