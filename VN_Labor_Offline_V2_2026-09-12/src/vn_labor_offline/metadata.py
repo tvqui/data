@@ -55,6 +55,7 @@ def find_doc_number(text: str, filename: str) -> str:
         (r"(?<!\d)(\d{1,4})[-_](\d{4})[-_]TT[-_](BLDTBXH|BNV)(?=$|[-_ (])", lambda m: f"{m.group(1)}/{m.group(2)}/TT-{m.group(3)}"),
         (r"(?<!\d)(\d{1,4})[-_](\d{4})[-_]NQ[-_]HDTP(?=$|[-_ (])", lambda m: f"{m.group(1)}/{m.group(2)}/NQ-HĐTP"),
         (r"(?<!\d)(\d{1,4})[-_](\d{4})[-_]NQ[-_]UBTVQH(\d+)(?=$|[-_ (])", lambda m: f"{m.group(1)}/{m.group(2)}/NQ-UBTVQH{m.group(3)}"),
+        (r"(?<!\d)(\d{1,4})[-_](\d{4})[-_]UBTVQH(\d+)(?=$|[-_ (])", lambda m: f"{m.group(1)}/{m.group(2)}/UBTVQH{m.group(3)}"),
         (r"(?<!\d)(\d{1,4})[-_]QD[-_]BHXH(?=$|[-_ (])", lambda m: f"{m.group(1)}/QĐ-BHXH"),
         (r"(?<!\d)(\d{1,4})[-_]VBHN[-_]VPQH(?=$|[-_ (])", lambda m: f"{m.group(1)}/VBHN-VPQH"),
     ]
@@ -73,9 +74,24 @@ def find_doc_number(text: str, filename: str) -> str:
 
 def find_effective_from(text: str) -> str:
     # Only an instrument's own commencement sentence. Never infer from VBHN footnotes.
+    normalized=text.replace('Iực','lực')
+    normalized=re.sub(r'(?i)biệu\s*[- ]?lực','hiệu lực',normalized)
+    normalized=re.sub(r'(?i)(?<=\d)[Il](?=\s*(?:tháng|năm|[/-]))','1',normalized)
+    normalized=re.sub(r'(?i)\bO(?=\d)','0',normalized)
+    normalized=re.sub(r'(?i)\btù\s+ngày\b','từ ngày',normalized)
+    normalized=re.sub(r'(?i)(\d)(năm\b)',r'\1 \2',normalized)
     dates=set()
-    for sentence in re.split(r'(?<=[.;])\s+',text):
-        if not re.search(r'(?:Bộ luật|Luật|Nghị định|Thông tư|Nghị quyết) này\s+có hiệu lực',sentence,re.I): continue
+    # Require the instrument itself at the start of a physical line. Legal OCR
+    # often drops the dot after a clause number and does not terminate headings.
+    subjects=list(re.finditer(
+        r'(?:^|(?<=[.!?])\s+)\s*(?:\d+\s*(?:[.)]\s*)?)?(?:Bộ luật|Luật|Nghị định|Thông tư|Nghị quyết) này\b',
+        normalized,re.I|re.M))
+    for index,subject in enumerate(subjects):
+        end=subjects[index+1].start() if index+1<len(subjects) else len(normalized)
+        end=min(end,subject.start()+500)
+        next_clause=re.search(r'\n\s*\d+\s*(?:[.)]\s*)?\S',normalized[subject.end():end])
+        if next_clause: end=subject.end()+next_clause.start()
+        sentence=normalized[subject.start():end]
         for pat in EFFECTIVE_PATTERNS:
             for m in pat.finditer(sentence):
                 value=iso_date(*m.groups())
@@ -91,6 +107,17 @@ def infer_issuer(text: str) -> str:
             if line.strip().upper().startswith(token): return issuer
         if line.strip().upper().startswith(('TÒA ÁN NHÂN DÂN','TOÀ ÁN NHÂN DÂN')): return line.strip()
     return ""
+
+
+def issuer_from_number(number: str) -> str:
+    upper=(number or '').upper()
+    if re.search(r'/QH\d+$',upper): return 'Quốc hội'
+    if upper.endswith('/NĐ-CP'): return 'Chính phủ'
+    if '/TT-BNV' in upper: return 'Bộ Nội vụ'
+    if '/TT-BLĐTBXH' in upper: return 'Bộ Lao động - Thương binh và Xã hội'
+    if '/NQ-HĐTP' in upper: return 'Hội đồng Thẩm phán TANDTC'
+    if 'UBTVQH' in upper: return 'Ủy ban Thường vụ Quốc hội'
+    return ''
 
 
 def infer_title(text: str, row: dict) -> str:
@@ -178,6 +205,9 @@ def build_registry(extracted: list[dict], cfg: dict, output_dir: Path) -> list[d
             record['instrument_number']=record.get('instrument_number') or record['document_number']
             record['document_number']=record['instrument_number']
         number=record.get('instrument_number','')
+        if legal and not record.get('issuer'):
+            record['issuer']=issuer_from_number(number)
+            if record['issuer']: record['metadata_evidence']['issuer']='instrument_number_authority'
         record['instrument_type']=next((typ for token,typ in [('QH','LAW'),('NĐ-CP','DECREE'),('TT-','CIRCULAR'),('UBTVQH','RESOLUTION'),('NQ-','RESOLUTION')] if token in number),'UNKNOWN') if legal else 'NOT_APPLICABLE'
         if 'UBTVQH' in number: record['instrument_type']='RESOLUTION'
         if source.get('instrument_type'): record['instrument_type']=source['instrument_type']
@@ -189,6 +219,8 @@ def build_registry(extracted: list[dict], cfg: dict, output_dir: Path) -> list[d
         from .temporal import instrument_id
         record['instrument_id']=instrument_id(record) if legal else ''
         record['provenance']['source_url']=record.get('source_url','')
+        if r.get('text_source'):
+            record['provenance']['full_text_source']=r['text_source']
         rows.append(record)
     write_jsonl(output_dir / "02_registry" / "documents.jsonl", rows)
     try:

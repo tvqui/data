@@ -34,6 +34,8 @@ def temporal_eligible(record, query_date):
     # A present-day EXPIRED status does not invalidate queries before effective_to.
     if record.get('legal_status') not in {'EFFECTIVE','EXPIRED','PARTIALLY_EXPIRED'}:
         return False
-    if record.get('legal_status') in {'EXPIRED','PARTIALLY_EXPIRED'} and not end:
+    # A partially expired instrument still has provisions in force. Only a
+    # fully expired instrument needs a whole-document end date here.
+    if record.get('legal_status') == 'EXPIRED' and not end:
         return False
     return when>=start and (end is None or when<end)

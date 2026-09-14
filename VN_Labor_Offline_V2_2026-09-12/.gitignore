@@ -12,6 +12,8 @@
 # Source corpus and generated pipeline outputs
 /data/
 /artifacts/
+/kaggle_upload/
+/source_attachments/
 
 # Secrets and local environment settings (keep the example)
 .env

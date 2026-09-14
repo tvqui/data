@@ -16,6 +16,7 @@ def _join(lines: list[str]) -> str:
 
 
 def _parse_main_body(doc: dict, text: str) -> list[dict]:
+    from .segmentation import structural_line
     lines = text.splitlines()
     articles: list[dict] = []
     current_article = None
@@ -23,7 +24,7 @@ def _parse_main_body(doc: dict, text: str) -> list[dict]:
     current_point = None
     chapter = ""; section = ""
     order = 0
-    quoted=False
+    quote_depth=0; ascii_quote=False
 
     def finish_point():
         nonlocal current_point
@@ -49,12 +50,15 @@ def _parse_main_body(doc: dict, text: str) -> list[dict]:
             current_article = None
 
     for line in lines:
-        s = line.strip()
+        original=line.strip()
+        s = structural_line(line)
         if not s: continue
-        if quoted or re.match(r'^[“"](?:Điều\s+\d|\d+[.)])',s):
+        starts_quote=re.match(r'^[“"]\s*(?:Điều\s+\d|\d+[.)]|[a-zđ][.)])',s,re.I)
+        if quote_depth or ascii_quote or starts_quote:
             target=current_point or current_clause or current_article
-            if target: target['_lines'].append(s)
-            quoted=not (s.endswith('”') or s.endswith('”;') or s.endswith('”.') or s.endswith('";') or s.endswith('".'))
+            if target: target['_lines'].append(original)
+            quote_depth=max(0,quote_depth+s.count('“')-s.count('”'))
+            if s.count('"') % 2: ascii_quote=not ascii_quote
             continue
         m = CHAPTER_RE.match(s)
         if m: chapter = m.group(1); continue
@@ -64,23 +68,23 @@ def _parse_main_body(doc: dict, text: str) -> list[dict]:
         if m:
             finish_article(); order += 1
             no, heading = m.group(1), (m.group(2) or '').strip()
-            current_article = {"number": no, "heading": heading, "_lines": [s], "clauses": [], "chapter": chapter, "section": section, "order": order}
+            current_article = {"number": no, "heading": heading, "_lines": [original], "clauses": [], "chapter": chapter, "section": section, "order": order}
             continue
         if current_article:
             m = CLAUSE_RE.match(s)
             if m:
                 finish_clause()
-                current_clause = {"number": m.group(1), "_lines": [s], "points": [], "order": len(current_article["clauses"]) + 1}
+                current_clause = {"number": m.group(1), "_lines": [original], "points": [], "order": len(current_article["clauses"]) + 1}
                 continue
             if current_clause:
                 m = POINT_RE.match(s)
                 if m:
                     finish_point()
-                    current_point = {"number": m.group(1).lower(), "_lines": [s], "order": len(current_clause["points"]) + 1}
+                    current_point = {"number": m.group(1).lower(), "_lines": [original], "order": len(current_clause["points"]) + 1}
                     continue
-            if current_point: current_point["_lines"].append(s)
-            elif current_clause: current_clause["_lines"].append(s)
-            else: current_article["_lines"].append(s)
+            if current_point: current_point["_lines"].append(original)
+            elif current_clause: current_clause["_lines"].append(original)
+            else: current_article["_lines"].append(original)
     finish_article()
 
     provisions: list[dict] = []
@@ -138,14 +142,37 @@ def parse_all(registry: list[dict], extracted: list[dict], output_dir: Path, cfg
         parts=segment_document(doc,text,settings.get('keep_unparsed_preamble',True))
         segments.extend(parts)
         parsed=parse_legal_document(doc,text)
-        repeated=[key for key,count in Counter(p['provision_id'] for p in parsed).items() if count>1]
+        counts=Counter(p['provision_id'] for p in parsed)
+        repeated=[key for key,count in counts.items() if count>1]
         if repeated:
-            problems.append({'severity':'ERROR','type':'AMBIGUOUS_CANONICAL_PATH','document_id':doc['document_id'],'duplicate_ids':repeated})
-            quarantined.extend(parsed)
-            continue
-        for p in parsed:
-            if len(p['text'])<int(settings.get('minimum_provision_chars',10)):
-                problems.append({'severity':'ERROR','type':'SHORT_PROVISION','provision_id':p['provision_id']})
+            # Keep every unambiguous subtree. Duplicate paths and all of their
+            # descendants are excluded from retrieval/graph, so accepted rows
+            # retain valid unique parents while the source remains reviewable.
+            ambiguous=set(repeated)
+            changed=True
+            while changed:
+                descendants={p['provision_id'] for p in parsed if p.get('parent_id') in ambiguous}
+                changed=not descendants.issubset(ambiguous); ambiguous.update(descendants)
+            rejected=[p for p in parsed if p['provision_id'] in ambiguous]
+            parsed=[p for p in parsed if p['provision_id'] not in ambiguous]
+            problems.append({'severity':'WARN','type':'AMBIGUOUS_CANONICAL_PATH_QUARANTINED',
+                'document_id':doc['document_id'],'duplicate_ids':repeated,'quarantined_rows':len(rejected)})
+            quarantined.extend(rejected)
+        minimum=int(settings.get('minimum_provision_chars',10))
+        short=[p for p in parsed if p['level']!='POINT' and len(p['text'])<minimum]
+        if short:
+            short_ids={p['provision_id'] for p in short}
+            # A short parent cannot safely support descendants.
+            changed=True
+            while changed:
+                descendants={p['provision_id'] for p in parsed if p.get('parent_id') in short_ids}
+                changed=not descendants.issubset(short_ids); short_ids.update(descendants)
+            rejected=[p for p in parsed if p['provision_id'] in short_ids]
+            parsed=[p for p in parsed if p['provision_id'] not in short_ids]
+            quarantined.extend(rejected)
+            for p in short:
+                problems.append({'severity':'WARN','type':'SHORT_PROVISION_QUARANTINED',
+                                 'provision_id':p['provision_id'],'document_id':doc['document_id']})
         for part in parts:
             if part['segment_type']=='ATTACHED_REGULATION':
                 problems.append({'severity':'ERROR','type':'ATTACHED_REGULATION_REQUIRES_REVIEW','segment_id':part['segment_id']})

@@ -26,7 +26,7 @@ def quality_issues(registry,extracted,provisions,nodes,edges,out,cfg=None):
         if d.get('version_role')=='CONSOLIDATED' and not d.get('consolidation_as_of'):
             error('MISSING_CONSOLIDATION_AS_OF',document_id=d['document_id'])
         x=by_file.get(d['file_id'],{})
-        if x.get('extension')=='.pdf':
+        if x.get('extension')=='.pdf' or x.get('text_source'):
             pages=x.get('page_provenance',[])
             if not pages or len(pages)!=x.get('page_count',len(pages)) or [p.get('page') for p in pages]!=list(range(1,len(pages)+1)):
                 error('MISSING_PAGE_PROVENANCE',document_id=d['document_id'])

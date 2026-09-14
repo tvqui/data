@@ -1,7 +1,7 @@
 import copy,json,subprocess,tempfile,unittest
 from pathlib import Path
 from unittest.mock import patch
-from vn_labor_offline.metadata import find_doc_number,infer_issuer,infer_title,find_effective_from,build_registry
+from vn_labor_offline.metadata import find_doc_number,infer_issuer,infer_title,find_effective_from,build_registry,issuer_from_number
 from vn_labor_offline.segmentation import segment_document
 from vn_labor_offline.legal_structure import parse_legal_document,parse_all
 from vn_labor_offline.relations import build_relation_edges,choose_document
@@ -52,6 +52,8 @@ class OfflineTests(unittest.TestCase):
         self.assertEqual(infer_issuer('BỘ LAO ĐỘNG - THƯƠNG BINH VÀ XÃ HỘI\nTHÔNG TƯ\nCăn cứ Luật của QUỐC HỘI'),'Bộ Lao động - Thương binh và Xã hội')
     def test_longest_issuer(self):
         self.assertEqual(infer_issuer('ỦY BAN THƯỜNG VỤ QUỐC HỘI'),'Ủy ban Thường vụ Quốc hội')
+        self.assertEqual(issuer_from_number('45/2019/QH14'),'Quốc hội')
+        self.assertEqual(issuer_from_number('145/2020/NĐ-CP'),'Chính phủ')
     def test_title_not_attachment(self):
         title=infer_title('THÔNG TƯ\nQuy định điều kiện lao động\nCăn cứ Luật\n(Ban hành kèm theo Thông tư...)',self.raw)
         self.assertNotIn('kèm theo',title); self.assertIn('điều kiện lao động',title)
@@ -67,6 +69,10 @@ class OfflineTests(unittest.TestCase):
         self.assertEqual(find_effective_from('Luật này có hiệu lực thi hành từ ngày 01 tháng 01 năm 2021.'),'2021-01-01')
     def test_conflicting_dates_unresolved(self):
         self.assertEqual(find_effective_from('Luật này có hiệu lực từ ngày 01/01/2021. Luật này có hiệu lực từ ngày 01/01/2026.'),'')
+    def test_effective_date_tolerates_ocr_but_rejects_embedded_subject(self):
+        text=('Phụ lục của Nghị định này có hiệu lực từ ngày 01 tháng 01 năm 2021. '
+              '1. Nghị định này có hiệu Iực thi hành tù ngày 30 tháng 1l năm 2025.')
+        self.assertEqual(find_effective_from(text),'2025-11-30')
     def test_annex_is_not_clause(self):
         text=LAW+'\nPHỤ LỤC\n1. Họ và tên của người đăng ký.\n2. Ngày sinh của người đăng ký.'
         ps=parse_legal_document(self.doc,text)
@@ -96,9 +102,19 @@ class OfflineTests(unittest.TestCase):
         self.assertEqual(sum(p['level']=='CLAUSE' for p in ps),1)
     def test_ambiguity_is_reported_not_renumbered(self):
         raw={**self.raw,'text':'Điều 1. Quy định\n1. Nội dung đầu tiên.\n1. Nội dung khác cùng số.'}
-        self.assertEqual(parse_all([self.doc],[raw],self.out,self.cfg),[])
+        accepted=parse_all([self.doc],[raw],self.out,self.cfg)
+        self.assertEqual([(p['level'],p['number']) for p in accepted],[('ARTICLE','1')])
         self.assertTrue(list(read_jsonl(self.out/'03_structure/quarantined_provisions.jsonl')))
-        self.assertEqual(list(read_jsonl(self.out/'reports/parsing_issues.jsonl'))[0]['type'],'AMBIGUOUS_CANONICAL_PATH')
+        issue=list(read_jsonl(self.out/'reports/parsing_issues.jsonl'))[0]
+        self.assertEqual(issue['type'],'AMBIGUOUS_CANONICAL_PATH_QUARANTINED')
+        self.assertEqual(issue['severity'],'WARN')
+    def test_short_parent_is_quarantined_but_short_point_can_be_valid(self):
+        raw={**self.raw,'text':'Điều 1. Quy định\n1. Nội dung đầy đủ.\na) Chết.\nĐiều 2.\n1. Nội dung bị mất cha.'}
+        accepted=parse_all([self.doc],[raw],self.out,self.cfg)
+        self.assertEqual([(p['level'],p['number']) for p in accepted],
+                         [('ARTICLE','1'),('CLAUSE','1'),('POINT','a')])
+        self.assertEqual(list(read_jsonl(self.out/'reports/parsing_issues.jsonl'))[0]['type'],
+                         'SHORT_PROVISION_QUARANTINED')
     def test_different_instruments_not_merged_by_title(self):
         self.assertNotEqual(instrument_key({**self.doc,'instrument_number':'90/2019/NĐ-CP'}),instrument_key({**self.doc,'instrument_number':'38/2022/NĐ-CP'}))
     def test_unknown_instruments_not_merged(self):
@@ -113,6 +129,9 @@ class OfflineTests(unittest.TestCase):
         self.assertFalse(temporal_eligible({'effective_from':'2020-01-01'},'2023-01-01'))
     def test_expired_without_end_excluded(self):
         self.assertFalse(temporal_eligible({'temporal_verified':True,'effective_from':'2020-01-01','legal_status':'EXPIRED'},'2023-01-01'))
+    def test_partially_expired_without_whole_document_end_is_eligible(self):
+        record={'temporal_verified':True,'effective_from':'2020-01-01','legal_status':'PARTIALLY_EXPIRED'}
+        self.assertTrue(temporal_eligible(record,'2023-01-01'))
     def test_no_global_case_article_fanout(self):
         ps=parse_legal_document(self.doc,LAW)
         result=build_relation_edges([self.doc],ps,[{'case_id':'c','facts':'Theo Điều 35.'}],self.out)
@@ -184,9 +203,10 @@ class ExtractionTests(unittest.TestCase):
         self.assertEqual(ocr.call_args.args[-1],2)
     def test_timeout_enforced_and_reported(self):
         from vn_labor_offline.extract import extract_all
+        self.cfg['extraction']['document_timeout_seconds']=.25
         with patch('vn_labor_offline.extract.subprocess.run',side_effect=subprocess.TimeoutExpired('worker',.1)) as run:
             result=extract_all([self.raw],self.cfg,self.out)
-        self.assertEqual(run.call_args.kwargs['timeout'],180)
+        self.assertEqual(run.call_args.kwargs['timeout'],.25)
         self.assertIn('TimeoutExpired',result[0]['extraction_error'])
 
     def test_dense_failure_still_leaves_graph_and_report(self):
