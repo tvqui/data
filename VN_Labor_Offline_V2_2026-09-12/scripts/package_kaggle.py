@@ -149,7 +149,7 @@ Loader thay dataset của dự án trong database này; không tự chuyển/xó
         raise ValueError('NEO4J_DATABASE phải là tên database trong credentials/Aura.')
     try:
         result_aura = run_logged(['kaggle/remote.py', 'aura'], 'neo4j_load.log', credentials)
-        print('Aura:', 'đã nạp và chạy audit' if result_aura == 0 else 'có lỗi; xem neo4j_load.log')
+        print('Aura:', 'load and audit completed' if result_aura == 0 else 'failed; see neo4j_load.log')
     finally:
         credentials.clear()
         subprocess.run([str(PYTHON), 'kaggle/remote.py', 'export'], cwd=ROOT, check=True)

@@ -24,7 +24,7 @@ ISSUER_HINTS = [
 ]
 
 METADATA_FIELDS={'document_number','source_document_number','instrument_number','instrument_type','document_type',
-    'title','issuer','promulgated_date','effective_from','effective_to','status','legal_status','source_url',
+    'title','issuer','promulgated_date','effective_from','effective_to','valid_from','valid_to','status','legal_status','source_url',
     'version_role','consolidation_as_of','status_checked_at','metadata_verified','temporal_verified','short_document_verified',
     'binding','canonical_for_text','language','authority_rank','citation_aliases','policy_series','case_number'}
 
@@ -215,6 +215,11 @@ def build_registry(extracted: list[dict], cfg: dict, output_dir: Path) -> list[d
         record['status']=record['legal_status']
         for field in ('effective_from','effective_to','promulgated_date','consolidation_as_of','status_checked_at'):
             record[field]=str(record.get(field) or '')
+        # Keep architecture terminology alongside the legacy effective_* names.
+        # Both are sourced from the same curated metadata and remain explicit
+        # when validity is unknown.
+        record['valid_from']=record['effective_from']
+        record['valid_to']=record['effective_to']
         record['version_id']=record['document_id']
         from .temporal import instrument_id
         record['instrument_id']=instrument_id(record) if legal else ''

@@ -15,6 +15,26 @@ def _join(lines: list[str]) -> str:
     return "\n".join(x for x in lines if x is not None).strip()
 
 
+def _locate_source_span(source_text: str, provision_text: str, search_at: int) -> tuple[int | None, int | None]:
+    """Locate normalized provision lines inside one segment's original text."""
+    lines=[line.strip() for line in provision_text.splitlines() if line.strip()]
+    if not lines:
+        return None,None
+    start=source_text.find(lines[0],search_at)
+    if start < 0:
+        start=source_text.find(lines[0])
+    if start < 0:
+        return None,None
+    cursor=start; end=start
+    for line in lines:
+        position=source_text.find(line,cursor)
+        if position < 0:
+            return None,None
+        end=position+len(line)
+        cursor=end
+    return start,end
+
+
 def _parse_main_body(doc: dict, text: str) -> list[dict]:
     from .segmentation import structural_line
     lines = text.splitlines()
@@ -61,9 +81,13 @@ def _parse_main_body(doc: dict, text: str) -> list[dict]:
             if s.count('"') % 2: ascii_quote=not ascii_quote
             continue
         m = CHAPTER_RE.match(s)
-        if m: chapter = m.group(1); continue
+        if m:
+            finish_article(); chapter = m.group(1); section = ""
+            continue
         m = SECTION_RE.match(s)
-        if m: section = m.group(1); continue
+        if m:
+            finish_article(); section = m.group(1)
+            continue
         m = ARTICLE_RE.match(s)
         if m:
             finish_article(); order += 1
@@ -120,12 +144,31 @@ def parse_legal_document(doc: dict, text: str) -> list[dict]:
         if segment['segment_type']!='MAIN_BODY': continue
         chapter_lines=[line for line in preamble.splitlines() if CHAPTER_RE.match(line) or SECTION_RE.match(line)]
         parsed=_parse_main_body(doc,'\n'.join(chapter_lines[-2:])+'\n'+segment['text'])
+        search_at=0
         for p in parsed:
             p['segment_id']=segment['segment_id']; p['segment_type']='MAIN_BODY'
             p['article_number']=p['number'] if p['level']=='ARTICLE' else p.get('article_number','')
             p['clause_number']=p['number'] if p['level']=='CLAUSE' else p.get('clause_number','')
             p['point_number']=p['number'] if p['level']=='POINT' else ''
             p['canonical_path']='/'.join(str(x) for x in [p['document_id'],'MAIN_BODY',p['article_number'],p['clause_number'],p['point_number']] if x)
+            # Preserve a deterministic source span for downstream evidence and
+            # retrieval. Nested provisions are searched from the previous match
+            # so repeated legal wording cannot silently point to the first hit.
+            source_text=segment['text']
+            span_start,span_end=_locate_source_span(source_text,p.get('text',''),search_at)
+            if span_start is not None:
+                p['char_start']=span_start
+                p['char_end']=span_end
+                p['line_start']=segment['line_start']+source_text[:span_start].count('\n')
+                p['line_end']=segment['line_start']+source_text[:span_end].count('\n')
+                p['span_scope']='SEGMENT_TEXT'
+                search_at=span_start+1
+            else:
+                p['char_start']=None; p['char_end']=None
+                p['line_start']=segment['line_start']; p['line_end']=segment['line_end']
+                p['span_scope']='SEGMENT_TEXT'
+            p['valid_from']=doc.get('valid_from') or doc.get('effective_from') or ''
+            p['valid_to']=doc.get('valid_to') or doc.get('effective_to') or ''
         result.extend(parsed)
     return result
 

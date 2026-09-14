@@ -12,6 +12,7 @@ from vn_labor_offline.config import load_yaml,resolve_paths,validate_config,CONF
 from vn_labor_offline.neo4j_loader import validate_export,neo4j_properties,replace_transaction
 from vn_labor_offline.util import read_jsonl
 from vn_labor_offline.quality import quality_issues
+from vn_labor_offline.graph_builder import build_graph,graph_parent_id
 
 ROOT=Path(__file__).resolve().parents[1]
 LAW='Điều 35. Chấm dứt hợp đồng\n1. Người lao động có quyền chấm dứt hợp đồng.\n2. Người lao động phải tuân thủ điều kiện sau:\na) Báo trước đúng thời hạn theo quy định.\nb) Thông báo cho người sử dụng lao động.'
@@ -108,6 +109,41 @@ class OfflineTests(unittest.TestCase):
         issue=list(read_jsonl(self.out/'reports/parsing_issues.jsonl'))[0]
         self.assertEqual(issue['type'],'AMBIGUOUS_CANONICAL_PATH_QUARANTINED')
         self.assertEqual(issue['severity'],'WARN')
+
+    def test_provisions_keep_source_spans_and_validity_window(self):
+        rows=parse_legal_document(
+            {'document_id':'d','effective_from':'2020-01-01','effective_to':'2025-01-01'},
+            'Chương I\nĐiều 1. Phạm vi\n1. Nội dung áp dụng.\na) Chi tiết.')
+        article=next(row for row in rows if row['level']=='ARTICLE')
+        point=next(row for row in rows if row['level']=='POINT')
+        self.assertEqual((article['line_start'],article['line_end']),(2,2))
+        self.assertLess(article['char_start'],article['char_end'])
+        self.assertEqual((point['valid_from'],point['valid_to']),('2020-01-01','2025-01-01'))
+        segment=segment_document({'document_id':'d'},'Chương I\nĐiều 1. Phạm vi\n1. Nội dung áp dụng.\na) Chi tiết.')[1]
+        for row in rows:
+            span=segment['text'][row['char_start']:row['char_end']]
+            self.assertEqual([x.strip() for x in span.splitlines() if x.strip()],
+                             [x.strip() for x in row['text'].splitlines() if x.strip()])
+            self.assertEqual(row['span_scope'],'SEGMENT_TEXT')
+
+    def test_chapter_section_graph_is_loadable_and_structurally_linked(self):
+        text='Chương I\nMục 1\nĐiều 1. Phạm vi\n1. Nội dung áp dụng.\nMục 2\nĐiều 2. Quy định khác\n1. Nội dung khác.'
+        provisions=parse_legal_document(self.doc,text)
+        nodes,edges=build_graph([self.doc],provisions,[],[],[],[],[],{},self.out)
+        validate_export(nodes,edges)
+        labels={node['label'] for node in nodes}
+        self.assertTrue({'Chapter','Section'}<=labels)
+        hierarchy={(edge['source'],edge['target']) for edge in edges if edge['type']=='PART_OF'}
+        self.assertTrue(all((p['provision_id'],graph_parent_id(p)) in hierarchy for p in provisions))
+        article_ids={p['provision_id'] for p in provisions if p['level']=='ARTICLE'}
+        self.assertFalse(any(e['type']=='NEXT' and e['source'] in article_ids and e['target'] in article_ids for e in edges))
+
+    def test_temporal_alias_conflict_is_rejected(self):
+        registry=[{**self.doc,'issuer':'Quốc hội','promulgated_date':'2019-11-20','source_url':'https://example.test',
+                   'metadata_verified':True,'temporal_verified':True,'effective_from':'2020-01-01',
+                   'effective_to':'','valid_from':'2021-01-01','valid_to':'','legal_status':'EFFECTIVE'}]
+        issues=quality_issues(registry,[],[],[],[],self.out,self.cfg)
+        self.assertIn('TEMPORAL_ALIAS_MISMATCH',{issue['type'] for issue in issues})
     def test_short_parent_is_quarantined_but_short_point_can_be_valid(self):
         raw={**self.raw,'text':'Điều 1. Quy định\n1. Nội dung đầy đủ.\na) Chết.\nĐiều 2.\n1. Nội dung bị mất cha.'}
         accepted=parse_all([self.doc],[raw],self.out,self.cfg)
@@ -142,6 +178,19 @@ class OfflineTests(unittest.TestCase):
         result=build_relation_edges([self.doc],ps,[{'case_id':'c','facts':'Theo điểm b khoản 2 Điều 35 Bộ luật Lao động số 45/2019/QH14.'}],self.out)
         edge=next(r for r in result if r['source_id']=='c')
         self.assertEqual(edge['target_id'],next(p['provision_id'] for p in ps if p['level']=='POINT' and p['number']=='b'))
+    def test_operative_relations_resolve_to_target_provisions(self):
+        target_provisions=parse_legal_document(self.doc,LAW)
+        source={**self.doc,'document_id':'source','file_id':'source-file','instrument_number':'01/2026/NĐ-CP',
+                'document_number':'01/2026/NĐ-CP','title':'Nghị định sửa đổi'}
+        source_text=('Điều 1. Sửa đổi điểm b khoản 2 Điều 35 của Bộ luật Lao động số 45/2019/QH14.\n'
+                     'Điều 2. Nghị định này quy định chi tiết khoản 2 Điều 35 của Bộ luật Lao động số 45/2019/QH14.')
+        source_provisions=parse_legal_document(source,source_text)
+        result=build_relation_edges([self.doc,source],target_provisions+source_provisions,[],self.out)
+        target_clause=next(p['provision_id'] for p in target_provisions if p['level']=='CLAUSE' and p['number']=='2')
+        target_point=next(p['provision_id'] for p in target_provisions if p['level']=='POINT' and p['number']=='b')
+        source_ids={p['provision_id'] for p in source_provisions}
+        self.assertTrue(any(e['type']=='AMENDS' and e['target_id']==target_point and e['source_id'] in source_ids for e in result))
+        self.assertTrue(any(e['type']=='IMPLEMENTS' and e['target_id']==target_clause and e['source_id'] in source_ids for e in result))
     def test_curated_alias_clause_resolution(self):
         doc={**self.doc,'citation_aliases':['Bộ luật Lao động']}
         ps=parse_legal_document(doc,LAW)

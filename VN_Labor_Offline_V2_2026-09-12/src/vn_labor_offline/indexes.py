@@ -11,7 +11,8 @@ def build_retrieval_units(provisions: list[dict], cases: list[dict], registry: l
     by_id={p['provision_id']:p for p in provisions}
     def metadata(d):
         return {k:d.get(k) for k in ('source_url','legal_status','binding','version_id','version_role','instrument_id','instrument_number',
-            'issuer','authority_rank','language','provenance','temporal_verified','effective_from','effective_to','consolidation_as_of','promulgated_date')}
+            'issuer','authority_rank','language','provenance','temporal_verified','effective_from','effective_to','valid_from','valid_to',
+            'consolidation_as_of','promulgated_date')}
     units=[]
     # Leaf provisions are the natural retrieval units; metadata keeps full hierarchy.
     for p in provisions:
@@ -32,6 +33,10 @@ def build_retrieval_units(provisions: list[dict], cases: list[dict], registry: l
             **metadata(d),"unit_id":p["provision_id"], "kind":"PROVISION", "text":breadcrumb+'\n'+ancestor_text+'\n'+p.get("text",""),
             'ancestor_context':ancestor_text,
             'source_text':p.get('text',''),'breadcrumb':breadcrumb,'segment_type':p.get('segment_type','MAIN_BODY'),
+            'provenance_span':{'segment_id':p.get('segment_id'),'char_start':p.get('char_start'),
+                               'char_end':p.get('char_end'),'line_start':p.get('line_start'),
+                               'line_end':p.get('line_end'),'span_scope':p.get('span_scope')},
+            'chapter':chapter,'section':next((a.get('section') for a in ancestors if a.get('section')),''),
             'article_number':p.get('article_number',''),'clause_number':p.get('clause_number',''),'point_number':p.get('point_number',''),
             "document_id":p["document_id"], "level":p["level"], "number":p["number"],
             "document_number":d.get("document_number",""), "document_title":d.get("title",""),

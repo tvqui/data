@@ -18,6 +18,7 @@ OUT = ROOT / "artifacts"
 
 def audit(check_neo4j=False, output_dir=None, config_path=None):
     from vn_labor_offline.config import load_yaml, resolve_paths
+    from vn_labor_offline.graph_builder import graph_parent_id
     from vn_labor_offline.quality import quality_issues
     from vn_labor_offline.evaluation import reviewed_quality_gate
     config_path = config_path or ROOT / 'config/pipeline.yaml'
@@ -84,7 +85,7 @@ def audit(check_neo4j=False, output_dir=None, config_path=None):
     check("graph", "all documents and provisions exported", bool(node_ids) and set(docs) | set(provs) <= node_ids)
     check("graph", "edge endpoints", bool(edges) and all(e.get("source") in node_ids and e.get("target") in node_ids for e in edges))
     hierarchy = {(e.get("source"), e.get("target")) for e in edges if e.get("type") == "PART_OF"}
-    check("graph", "all hierarchy edges exported", bool(provisions) and all((p.get("provision_id"), p.get("parent_id")) in hierarchy for p in provisions))
+    check("graph", "all hierarchy edges exported", bool(provisions) and all((p.get("provision_id"), graph_parent_id(p)) in hierarchy for p in provisions))
     versioned = {e.get("source") for e in edges if e.get("type") == "VERSION_OF"}
     required_versions = {d.get("document_id") for d in registry if d.get("source_group") == "LEGAL_DOCUMENT" or d.get("document_type") == "CONSOLIDATED"}
     check("graph", "version anchors", bool(required_versions) and required_versions <= versioned)

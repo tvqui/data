@@ -19,8 +19,9 @@ def temporal_eligible(record, query_date):
         return False
     try:
         when=date.fromisoformat(str(query_date))
-        start=date.fromisoformat(str(record['effective_from']))
-        end=date.fromisoformat(str(record['effective_to'])) if record.get('effective_to') else None
+        start=date.fromisoformat(str(record.get('valid_from') or record['effective_from']))
+        end_value=record.get('valid_to') or record.get('effective_to')
+        end=date.fromisoformat(str(end_value)) if end_value else None
     except (ValueError,KeyError):
         return False
     if record.get('version_role')=='CONSOLIDATED':

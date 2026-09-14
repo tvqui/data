@@ -17,6 +17,24 @@ def abstract_law_key(d: dict) -> str:
     return instrument_key(d)
 
 
+def hierarchy_ids(p: dict) -> tuple[str | None, str | None]:
+    """Return stable Chapter/Section IDs for an Article provision."""
+    document_id=p["document_id"]
+    chapter=p.get("chapter") or ""
+    section=p.get("section") or ""
+    chapter_id=stable_id(document_id,"chapter",chapter,prefix="hier") if chapter else None
+    section_id=stable_id(document_id,"section",chapter,section,prefix="hier") if section else None
+    return chapter_id,section_id
+
+
+def graph_parent_id(p: dict) -> str:
+    """Return the parent represented by PART_OF in the exported graph."""
+    if p.get("level") != "ARTICLE":
+        return p["parent_id"]
+    chapter_id,section_id=hierarchy_ids(p)
+    return section_id or chapter_id or p["document_id"]
+
+
 def build_graph(registry, provisions, cases, issues, issue_edges, checklists, relation_edges, communities, output_dir: Path):
     nodes=[]; edges=[]
     # Documents + AbstractLaw/Version layer. Legal documents are version/provenance-bearing
@@ -45,15 +63,36 @@ def build_graph(registry, provisions, cases, issues, issue_edges, checklists, re
         if s['segment_type'] in {'ANNEX','FORM','ATTACHED_REGULATION'}:
             nodes.append(node(s['segment_id'],{'FORM':'Form','ANNEX':'Annex','ATTACHED_REGULATION':'AttachedRegulation'}[s['segment_type']],layer='document',**s))
             edges.append(edge(s['segment_id'],s['document_id'],'PART_OF'))
-    # Natural legal hierarchy
+    # Natural legal hierarchy. Chapter/Section nodes are materialized once in
+    # first-appearance order, then Articles point at their structural parent.
+    hierarchy_seen=set(); hierarchy_siblings={}
+    for p in provisions:
+        if p["level"] != "ARTICLE":
+            continue
+        chapter_id,section_id=hierarchy_ids(p)
+        if chapter_id and chapter_id not in hierarchy_seen:
+            nodes.append(node(chapter_id,"Chapter",number=p["chapter"],document_id=p["document_id"],layer="rule"))
+            edges.append(edge(chapter_id,p["document_id"],"PART_OF"))
+            hierarchy_siblings.setdefault(p["document_id"],[]).append(chapter_id)
+            hierarchy_seen.add(chapter_id)
+        if section_id and section_id not in hierarchy_seen:
+            parent_id=chapter_id or p["document_id"]
+            nodes.append(node(section_id,"Section",number=p["section"],chapter=p.get("chapter","") or "",document_id=p["document_id"],layer="rule"))
+            edges.append(edge(section_id,parent_id,"PART_OF"))
+            hierarchy_siblings.setdefault(parent_id,[]).append(section_id)
+            hierarchy_seen.add(section_id)
+    for siblings_at_level in hierarchy_siblings.values():
+        for a,b in zip(siblings_at_level,siblings_at_level[1:]):
+            edges.append(edge(a,b,"NEXT"))
+
     for p in provisions:
         label={"ARTICLE":"Article","CLAUSE":"Clause","POINT":"Point"}.get(p["level"],"Provision")
         pp = dict(p); pp["layer"] = "rule"
         nodes.append(node(p["provision_id"], label, **pp))
-        edges.append(edge(p["provision_id"], p["parent_id"], "PART_OF"))
+        edges.append(edge(p["provision_id"],graph_parent_id(p),"PART_OF"))
     # NEXT at each parent level.
     siblings={}
-    for p in provisions: siblings.setdefault(p["parent_id"],[]).append(p)
+    for p in provisions: siblings.setdefault(graph_parent_id(p),[]).append(p)
     for parent, arr in siblings.items():
         arr=sorted(arr,key=lambda x:x.get("order",0))
         for a,b in zip(arr,arr[1:]): edges.append(edge(a["provision_id"], b["provision_id"], "NEXT"))

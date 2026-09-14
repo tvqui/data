@@ -8,6 +8,7 @@ from .temporal import instrument_key
 
 def quality_issues(registry,extracted,provisions,nodes,edges,out,cfg=None):
     issues=[]; settings=cfg or {}; by_file={x['file_id']:x for x in extracted}
+    segments={s.get('segment_id'):s for s in read_jsonl(out/'03_structure/segments.jsonl')}
     def error(kind,**detail): issues.append({'severity':'ERROR','type':kind,**detail})
     for d in registry:
         legal=d.get('source_group') in {'LEGAL_DOCUMENT','CONSOLIDATED'}
@@ -17,12 +18,17 @@ def quality_issues(registry,extracted,provisions,nodes,edges,out,cfg=None):
         if not d.get('metadata_verified'): error('UNVERIFIED_METADATA',document_id=d['document_id'])
         if not d.get('temporal_verified'): error('UNVERIFIED_TEMPORAL_METADATA',document_id=d['document_id'])
         dates={}
-        for field in ('promulgated_date','effective_from','effective_to','consolidation_as_of'):
+        for field in ('promulgated_date','effective_from','effective_to','valid_from','valid_to','consolidation_as_of'):
             if d.get(field):
                 try: dates[field]=date.fromisoformat(str(d[field]))
-                except ValueError: error('INVALID_DATE',document_id=d['document_id'],field=field)
+                except (TypeError,ValueError): error('INVALID_DATE',document_id=d['document_id'],field=field)
         if dates.get('effective_from') and dates.get('effective_to') and dates['effective_to']<=dates['effective_from']:
             error('TEMPORAL_CONTRADICTION',document_id=d['document_id'])
+        if dates.get('valid_from') and dates.get('valid_to') and dates['valid_to']<=dates['valid_from']:
+            error('TEMPORAL_VALIDITY_CONTRADICTION',document_id=d['document_id'])
+        for effective,valid in (('effective_from','valid_from'),('effective_to','valid_to')):
+            if str(d.get(effective) or '') != str(d.get(valid) or ''):
+                error('TEMPORAL_ALIAS_MISMATCH',document_id=d['document_id'],effective_field=effective,valid_field=valid)
         if d.get('version_role')=='CONSOLIDATED' and not d.get('consolidation_as_of'):
             error('MISSING_CONSOLIDATION_AS_OF',document_id=d['document_id'])
         x=by_file.get(d['file_id'],{})
@@ -37,6 +43,21 @@ def quality_issues(registry,extracted,provisions,nodes,edges,out,cfg=None):
     for p in provisions:
         if p.get('segment_type')!='MAIN_BODY': error('NON_MAIN_BODY_PROVISION',provision_id=p['provision_id'])
         if not p.get('canonical_path'): error('MISSING_CANONICAL_PATH',provision_id=p['provision_id'])
+        if p.get('char_start') is None or p.get('char_end') is None or p.get('line_start') is None or p.get('line_end') is None or not p.get('segment_id'):
+            error('MISSING_PROVISION_PROVENANCE',provision_id=p['provision_id'])
+            continue
+        segment=segments.get(p['segment_id'])
+        start=p['char_start']; end=p['char_end']; line_start=p['line_start']; line_end=p['line_end']
+        valid_span=(segment is not None and p.get('span_scope')=='SEGMENT_TEXT' and
+                    isinstance(start,int) and isinstance(end,int) and 0<=start<end<=len(segment.get('text','')) and
+                    isinstance(line_start,int) and isinstance(line_end,int) and
+                    segment.get('line_start',0)<=line_start<=line_end<=segment.get('line_end',0))
+        if valid_span:
+            source_lines=[x.strip() for x in segment['text'][start:end].splitlines() if x.strip()]
+            provision_lines=[x.strip() for x in p.get('text','').splitlines() if x.strip()]
+            valid_span=source_lines==provision_lines
+        if not valid_span:
+            error('INVALID_PROVISION_PROVENANCE',provision_id=p['provision_id'],segment_id=p.get('segment_id'))
     for key,count in Counter(p.get('canonical_path') for p in provisions).items():
         if key and count>1: error('DUPLICATE_CANONICAL_PATH',canonical_path=key,count=count)
     docs={d['document_id']:d for d in registry}; ns={n['id']:n for n in nodes}

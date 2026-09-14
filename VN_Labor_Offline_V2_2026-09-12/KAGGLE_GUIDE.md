@@ -1,6 +1,6 @@
 # Hướng dẫn Kaggle cho qutrnvinh3
 
-> **Đã hoàn tất ngày 14/09/2026:** `vn_labor_results_V5.zip` đã được kiểm tra độc lập; Document Registry, Structured Provisions, Versioned HierarGraph, Dense/BM25 và Aura đều PASS. Xem [KAGGLE_RESULTS_REVIEW.md](KAGGLE_RESULTS_REVIEW.md). Không cần chạy lại pipeline nếu code và corpus không thay đổi.
+> **Mốc ổn định ngày 14/09/2026:** `vn_labor_results_V5.zip` đã được kiểm tra độc lập; Document Registry, Structured Provisions, Versioned HierarGraph, Dense/BM25 và Aura đều PASS. Code hiện tại đã bổ sung source span, `valid_*`, Chapter/Section và legal relations nên cần chạy lại các đầu ra phụ thuộc. Dùng V5 làm checkpoint để tránh OCR lại corpus.
 
 Môi trường bạn đã kiểm tra: Python 3.12.13, PyTorch 2.10.0+cu128, CUDA hoạt động, hai Tesla T4; quota còn 30 giờ. Gói này dùng một T4 cho OCR và Dense theo từng bước; không tự nhân đôi hiệu năng chỉ vì có hai GPU. CPU/RAM dùng cho parsing và BM25 là của Kaggle.
 
@@ -97,7 +97,7 @@ Loader nạp dataset dự án vào instance Aura riêng này và kiểm tra tr�
 
 ## 7. Tiếp tục từ lần chạy trước
 
-Với lần chạy sửa v4 hiện tại, upload `vn_labor_results_v4.zip` vào một Dataset Private thứ hai, Add Input Dataset đó và đặt `RESTORE_ARCHIVE = "AUTO"`. Giữ `RUN_PIPELINE=True` và `LOAD_AURA=True` để dựng lại toàn bộ đầu ra phụ thuộc và xác minh Aura; document cache vẫn giúp tránh OCR lại 94 tài liệu không đổi.
+Với code hiện tại, upload `vn_labor_results_V5.zip` vào một Dataset Private thứ hai, Add Input Dataset đó và đặt `RESTORE_ARCHIVE = "AUTO"`. Giữ `RUN_PIPELINE=True` và `LOAD_AURA=True` để dựng lại Structured Provisions, Versioned HierarGraph, Dense/BM25 và xác minh Aura. Checkpoint V5 chứa document cache đã hoàn tất cho 95 tài liệu, nên pipeline có thể tái sử dụng kết quả trích xuất khi fingerprint vẫn khớp.
 
 Trong cùng phiên, chạy lại pipeline sẽ dùng checkpoint thành công. Phiên nền Save & Run All bắt đầu sạch nên muốn tiếp tục phải mang checkpoint vào.
 

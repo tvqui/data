@@ -51,7 +51,8 @@ def review(archive, config, replacement_files=()):
                     converted=Path(temporary)/'document.docx'; converted.write_bytes(payload)
                     row['text']=clean_text(extract_docx(converted))
                 row['text_chars']=len(row['text']); row['extraction_method']='review_zip_converted_docx_ordered'
-        reviews=reviewed_pages(row,cfg)
+        review_row={**row,'sha256':(row.get('text_source') or {}).get('sha256',row['sha256'])}
+        reviews=reviewed_pages(review_row,cfg)
         if reviews and row.get('page_provenance'):
             texts=[]; offset=0
             for page in row['page_provenance']:

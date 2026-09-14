@@ -4,7 +4,7 @@ from collections import defaultdict
 from pathlib import Path
 from .util import read_jsonl
 
-LABELS={'LegalInstrument','AbstractLaw','PolicySeries','DocumentVersion','ConsolidatedDocumentVersion','SourceDocument','SupplementaryDocument','Article','Clause','Point','Provision','Annex','Form','AttachedRegulation','Judgment','CassationDecision','Precedent','Case','CaseFeature','LegalIssue','DiagnosticItem','Community'}
+LABELS={'LegalInstrument','AbstractLaw','PolicySeries','DocumentVersion','ConsolidatedDocumentVersion','SourceDocument','SupplementaryDocument','Chapter','Section','Article','Clause','Point','Provision','Annex','Form','AttachedRegulation','Judgment','CassationDecision','Precedent','Case','CaseFeature','LegalIssue','DiagnosticItem','Community'}
 
 def neo4j_properties(properties):
     result={}

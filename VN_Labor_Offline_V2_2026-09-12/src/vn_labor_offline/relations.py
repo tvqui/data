@@ -7,7 +7,13 @@ from .util import stable_id, write_jsonl
 
 ARTICLE_REF=re.compile(r'(?:điểm\s+(?P<point>[a-zđ])\s*[,;]?\s*)?(?:khoản\s+(?P<clause>\d+)\s*)?Điều\s+(?P<article>\d+[a-zđ]?)(?!\w)',re.I)
 QUALIFIER=re.compile(r'^\s*(?:(?:của|tại)\s+)?(?:Bộ luật|Luật|Nghị định|Thông tư|Nghị quyết)\b',re.I)
-REL_PATTERNS=[('AMENDS',re.compile(r'^\s*(?:\d+[.)]\s*)?Sửa đổi(?:,?\s*bổ sung)?[^\n]{0,220}',re.I)),('REPEALS',re.compile(r'^\s*(?:\d+[.)]\s*)?Bãi bỏ[^\n]{0,220}',re.I)),('REPLACES',re.compile(r'^\s*(?:\d+[.)]\s*)?(?:Văn bản này\s+)?thay thế[^\n]{0,220}',re.I))]
+OPERATIVE_PREFIX=r'^\s*(?:(?:Điều\s+\d+[a-zđ]?|\d+)[.)]\s*)?'
+REL_PATTERNS=[
+    ('AMENDS',re.compile(OPERATIVE_PREFIX+r'Sửa đổi(?:,?\s*bổ sung)?[^\n]{0,220}',re.I)),
+    ('REPEALS',re.compile(OPERATIVE_PREFIX+r'Bãi bỏ[^\n]{0,220}',re.I)),
+    ('REPLACES',re.compile(OPERATIVE_PREFIX+r'(?:(?:Văn bản|Nghị định|Thông tư) này\s+)?thay thế[^\n]{0,220}',re.I)),
+    ('IMPLEMENTS',re.compile(OPERATIVE_PREFIX+r'(?:(?:Văn bản|Nghị định|Thông tư) này\s+)?(?:quy định chi tiết|hướng dẫn thi hành)[^\n]{0,220}',re.I)),
+]
 
 def norm_docno(s):
     return s.upper().replace('ND-CP','NĐ-CP').replace('TT-BLDTBXH','TT-BLĐTBXH').replace('QD-BHXH','QĐ-BHXH')
@@ -64,7 +70,17 @@ def build_relation_edges(registry, provisions, cases, output_dir: Path, extracte
                 if not match: continue
                 for number in DOCNO_RE.finditer(match.group()):
                     target=choose_document(by_number.get(norm_docno(number.group()),[]))
-                    if target: emit(p['document_id'],target['document_id'],typ,match.group(),.85,'operative_main_body')
+                    if target:
+                        emit(p['document_id'],target['document_id'],typ,match.group(),.85,'operative_main_body')
+                        # When the operative sentence names a concrete
+                        # Article/Clause/Point, retain that more useful
+                        # document-to-provision edge as well.
+                        for ref in ARTICLE_REF.finditer(match.group()):
+                            article=ref['article'].lower(); clause=ref['clause'] or ''
+                            point=(ref['point'] or '').lower()
+                            candidates=by_path.get((target['document_id'],article,clause,point),[])
+                            if len(candidates)==1:
+                                emit(p['provision_id'],candidates[0]['provision_id'],typ,match.group(),.82,'operative_provision')
     for case in cases:
         resolve(case['case_id'],'\n'.join(case.get(k,'') for k in ('facts','reasoning','decision')),date=case.get('decision_date',''))
     result=list({e['edge_id']:e for e in edges}.values())
