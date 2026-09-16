@@ -87,6 +87,7 @@ def export():
     ready = bool(validation.get('ready_for_offline_v1')) and run.get('pipeline_exit_code', 0) == 0
     lines = ['# Báo cáo chạy Kaggle', '', f'Tạo lúc (UTC): {datetime.now(timezone.utc).isoformat()}', '',
              f'OFFLINE v1: **{"PASS" if ready else "CHƯA ĐẠT"}**',
+             f'ONLINE-ready: **{"PASS" if validation.get("offline_ready_for_online") else "CHƯA ĐẠT"}**',
              f'Mã thoát pipeline: {run.get("pipeline_exit_code", "chưa chạy trong phiên này")}', '',
              'Mã thoát 0 chỉ xác nhận tiến trình kết thúc; xem validation để đánh giá dữ liệu.', '',
              '| Đầu ra | Trạng thái |', '|---|---|']

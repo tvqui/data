@@ -21,6 +21,10 @@ def audit(check_neo4j=False, output_dir=None, config_path=None):
     from vn_labor_offline.graph_builder import graph_parent_id
     from vn_labor_offline.quality import quality_issues
     from vn_labor_offline.evaluation import reviewed_quality_gate
+    from vn_labor_offline.gold import evaluate_gold
+    from vn_labor_offline.gold_evaluator import evaluation_fingerprint
+    from vn_labor_offline.scanner import source_catalog_gate
+    from vn_labor_offline.readiness import semantic_readiness_gate
     config_path = config_path or ROOT / 'config/pipeline.yaml'
     cfg = resolve_paths(load_yaml(config_path), config_path)
     OUT = Path(output_dir).resolve() if output_dir else cfg['output_dir']
@@ -141,7 +145,17 @@ def audit(check_neo4j=False, output_dir=None, config_path=None):
     stages = {stage: all(c["passed"] for c in checks if c["stage"] == stage) for stage in ("registry", "structure", "graph", "indexes")}
     report = dict(checked_at=datetime.now(timezone.utc).isoformat(), ready_for_offline_v1=all(stages.values()), stages=stages, checks=checks, metadata_gaps=metadata_gaps)
     report['legal_quality_evaluation'] = reviewed_quality_gate(OUT, nodes, edges)
-    report['offline_ready_for_online'] = report['ready_for_offline_v1'] and report['legal_quality_evaluation']['passed']
+    catalog = rows('00_manifest/source_catalog_resolved.jsonl', 'registry')
+    report['source_catalog_quality'] = source_catalog_gate(catalog, registry)
+    report['semantic_quality'] = semantic_readiness_gate(OUT, registry)
+    # Reviewer-authored Gold/qrels must pin this graph + retrieval + index build.
+    report['gold_build_id'] = evaluation_fingerprint(OUT) if all(
+        c['passed'] for c in checks if c['stage'] in {'graph', 'indexes'} and
+        c['check'] != 'Neo4j live verification') else None
+    report['gold_evaluation'] = evaluate_gold(OUT)
+    report['offline_ready_for_online'] = (report['ready_for_offline_v1'] and
+        report['source_catalog_quality']['passed'] and report['semantic_quality']['passed'] and
+        report['legal_quality_evaluation']['passed'] and report['gold_evaluation']['passed'])
     report_dir = OUT / "reports"
     report_dir.mkdir(parents=True, exist_ok=True)
     (report_dir / "final_outputs_validation.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")

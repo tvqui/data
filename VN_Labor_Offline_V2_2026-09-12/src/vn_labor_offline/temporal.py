@@ -17,6 +17,8 @@ def temporal_eligible(record, query_date):
     """Unknown/unverified validity is excluded, rather than treated as always valid."""
     if not record.get('temporal_verified'):
         return False
+    if record.get('provision_version_id') and not record.get('provision_temporal_verified'):
+        return False
     try:
         when=date.fromisoformat(str(query_date))
         start=date.fromisoformat(str(record.get('valid_from') or record['effective_from']))
@@ -32,6 +34,10 @@ def temporal_eligible(record, query_date):
         try:
             if when>date.fromisoformat(str(record['status_checked_at'])): return False
         except ValueError: return False
+    if record.get('temporal_coverage_as_of'):
+        try:
+            if when>date.fromisoformat(str(record['temporal_coverage_as_of'])): return False
+        except ValueError: return False
     # A present-day EXPIRED status does not invalidate queries before effective_to.
     if record.get('legal_status') not in {'EFFECTIVE','EXPIRED','PARTIALLY_EXPIRED'}:
         return False
@@ -40,3 +46,26 @@ def temporal_eligible(record, query_date):
     if record.get('legal_status') == 'EXPIRED' and not end:
         return False
     return when>=start and (end is None or when<end)
+
+
+def select_provision_versions(versions: list[dict], query_date: str) -> list[dict]:
+    """Choose only explicitly reviewed provision intervals, end exclusive."""
+    when=date.fromisoformat(str(query_date))
+    selected={}
+    for version in versions:
+        if not version.get('provision_temporal_verified'):
+            continue
+        try:
+            start=date.fromisoformat(str(version['valid_from']))
+            end=date.fromisoformat(str(version['valid_to'])) if version.get('valid_to') else None
+        except (ValueError,KeyError,TypeError):
+            continue
+        if when<start or end and when>=end:
+            continue
+        if version.get('temporal_coverage_as_of') and when>date.fromisoformat(str(version['temporal_coverage_as_of'])):
+            continue
+        identity=version['provision_identity_id']
+        if identity in selected and selected[identity]['provision_version_id']!=version['provision_version_id']:
+            raise ValueError(f'Conflicting provision versions at {query_date}: {identity}')
+        selected[identity]=version
+    return list(selected.values())

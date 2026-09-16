@@ -13,6 +13,9 @@ from vn_labor_offline.neo4j_loader import validate_export,neo4j_properties,repla
 from vn_labor_offline.util import read_jsonl
 from vn_labor_offline.quality import quality_issues
 from vn_labor_offline.graph_builder import build_graph,graph_parent_id
+from vn_labor_offline.scanner import resolve_source_catalog
+from vn_labor_offline.provision_versions import materialize_provision_versions
+from vn_labor_offline.gold import validate_gold_record
 
 ROOT=Path(__file__).resolve().parents[1]
 LAW='Điều 35. Chấm dứt hợp đồng\n1. Người lao động có quyền chấm dứt hợp đồng.\n2. Người lao động phải tuân thủ điều kiện sau:\na) Báo trước đúng thời hạn theo quy định.\nb) Thông báo cho người sử dụng lao động.'
@@ -40,6 +43,20 @@ class OfflineTests(unittest.TestCase):
         (self.out/'config').mkdir()
         (self.out/'config/source_catalog.yaml').write_text(json.dumps({'sources':{self.raw['filename']:{'sha256':'wrong'}}}),encoding='utf-8')
         with self.assertRaisesRegex(ValueError,'SHA mismatch'): build_registry([self.raw],self.cfg,self.out)
+
+    def test_source_catalog_resolution_is_complete_and_unverified_without_explicit_provenance(self):
+        resolved=resolve_source_catalog([self.raw],self.out,self.out)
+        self.assertEqual(len(resolved),1)
+        self.assertEqual(resolved[0]['catalog_status'],'UNVERIFIED')
+        self.assertIn('source_provider',resolved[0]['missing_fields'])
+        self.assertTrue((self.out/'00_manifest/source_review_queue.jsonl').exists())
+
+    def test_source_catalog_resolution_fails_closed_on_sha_mismatch(self):
+        (self.out/'config').mkdir()
+        (self.out/'config/source_catalog.yaml').write_text(
+            json.dumps({'sources':{self.raw['relative_path']:{'sha256':'wrong'}}}),encoding='utf-8')
+        with self.assertRaisesRegex(ValueError,'SHA mismatch'):
+            resolve_source_catalog([self.raw],self.out,self.out)
     def test_judgment_identity(self):
         raw={**self.raw,'filename':'02-2025-LĐPT.pdf','source_group':'JUDICIAL','document_type_hint':'JUDGMENT','text':'Căn cứ 05/2015/NĐ-CP'}
         d=build_registry([raw],self.cfg,self.out)[0]
@@ -222,6 +239,17 @@ class OfflineTests(unittest.TestCase):
     def test_retrieval_duplicate_rejected(self):
         ps=parse_legal_document(self.doc,LAW)
         with self.assertRaises(ValueError): build_retrieval_units(ps+ps,[],[self.doc])
+
+    def test_gold_requires_approved_reviewer(self):
+        self.assertIn('missing:reviewer', validate_gold_record({
+            'query_id':'q1','question':'q','query_type':'DIRECT_PROVISION',
+            'review_status':'APPROVED','reviewer':None}))
+
+    def test_provision_identity_is_stable_for_same_instrument_path(self):
+        ps=parse_legal_document(self.doc,LAW)
+        identities,_=materialize_provision_versions([self.doc],ps,self.out)
+        self.assertEqual(len(identities),len({x['provision_identity_id'] for x in identities}))
+        self.assertTrue(all(p.get('provision_identity_id') for p in ps))
     def test_nested_neo4j_property_roundtrip(self):
         self.assertEqual(json.loads(neo4j_properties({'x':[{'a':1}]})['x']),[{'a':1}])
     def test_graph_dangling_or_duplicate_rejected(self):

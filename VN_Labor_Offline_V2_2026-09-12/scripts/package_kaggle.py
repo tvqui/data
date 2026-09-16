@@ -17,15 +17,14 @@ def make_notebook():
                       'execution_count': None, 'outputs': []})
     md('''# VN Labor — chạy trên Kaggle
 Notebook và Dataset phải để **Private**. Bật **GPU T4 x2** và **Internet**.
-Thêm Dataset chứa gói `vn_labor_kaggle.zip` qua **Add Input** trước khi chạy.
+Thêm Dataset chứa package V8 qua **Add Input** trước khi chạy, cùng một Dataset checkpoint kết quả 7.3.
 Code sử dụng GPU 0 theo từng bước; GPU 1 chưa dùng. Máy local chỉ upload/download.
 Không nhập mật khẩu/token vào các cell. Aura là bước tùy chọn, dùng Kaggle Secrets.
 ''')
-    code('''# Lần đầu giữ nguyên các giá trị này.
+    code('''# V8 chạy tiếp từ đúng một checkpoint kết quả 7.3.
 RUN_PIPELINE = True
 LOAD_AURA = False
-# Dùng "AUTO" khi đã Add Input đúng một Dataset checkpoint; để trống ở lần đầu.
-RESTORE_ARCHIVE = ""
+RESTORE_ARCHIVE = "AUTO"
 ''')
     md('''## 1. Xác minh dữ liệu và cài môi trường riêng
 Giữ nguyên PyTorch/CUDA do Kaggle cung cấp; cài thư viện còn lại trong môi trường riêng.
@@ -40,7 +39,7 @@ import time
 matches = list(Path('/kaggle/input').rglob('bundle_manifest.json'))
 matches = [p for p in matches if (p.parent / 'kaggle/bootstrap.py').exists()]
 if len(matches) != 1:
-    raise RuntimeError('Hãy Add Input đúng một Dataset của gói VN Labor; tìm thấy: ' + str(len(matches)))
+    raise RuntimeError('Hãy Add Input đúng một Dataset code/corpus V8; tìm thấy: ' + str(len(matches)))
 source = matches[0].parent
 restore = RESTORE_ARCHIVE
 if restore == 'AUTO':
@@ -130,8 +129,11 @@ finally:
 if RUN_PIPELINE and result != 0:
     print('Pipeline có lỗi thực thi. Kết quả một phần và log đã được đóng gói; xem Output.')
 ''')
-    md('''## 4. Neo4j Aura — bỏ qua khi chưa có tài khoản
-Để LOAD_AURA=False ở lần đầu. Khi có database **Free riêng cho dự án**, vào
+    md('''## 4. Neo4j Aura — nạp sau khi dựng dữ liệu
+Graph 7.3 có 50.272 nodes/80.912 relationships và đã nạp được vào Aura. Trước khi nạp
+graph V8 mới, xem số node/edge trong summary để kiểm tra quota của instance hiện tại.
+Nếu đã có artifacts V8 và muốn chỉ nạp Aura, đặt RUN_PIPELINE=False, LOAD_AURA=True;
+không chạy lại OCR/Dense/BM25. Với database đã cấu hình, vào
 **Add-ons → Secrets**, tạo và cấp quyền cho Notebook các secret:
 `NEO4J_URI`, `NEO4J_USER`, `NEO4J_PASSWORD`, `NEO4J_DATABASE`.
 URI có dạng `neo4j+s://....databases.neo4j.io`; user thường là `neo4j`.
@@ -183,13 +185,15 @@ if archive.exists():
 def build():
     DEST.mkdir(exist_ok=True)
     files = {}
-    for folder, suffixes in [('src', {'.py'}), ('config', {'.yaml'}), ('kaggle', {'.py', '.txt'}),
+    for folder, suffixes in [('src', {'.py'}), ('config', {'.yaml', '.json'}), ('gold', {'.json', '.jsonl'}),
+                             ('kaggle', {'.py', '.txt'}),
                              ('tests', {'.py'}), ('source_attachments', {'.pdf'}), ('data', {'.pdf', '.doc', '.docx', '.html', '.htm', '.txt', '.json'})]:
         for p in sorted((ROOT / folder).rglob('*')):
             if p.is_file() and not p.is_symlink() and p.suffix.lower() in suffixes and '__pycache__' not in p.parts:
                 files[p.relative_to(ROOT).as_posix()] = p
     for name in ['pyproject.toml', 'scripts/prepare_dense_model.py', 'scripts/validate_outputs.py', 'scripts/package_kaggle.py',
-                 'scripts/prepare_source_attachments.py', 'scripts/review_kaggle_extraction.py']:
+                 'scripts/prepare_source_attachments.py', 'scripts/review_kaggle_extraction.py',
+                 'scripts/evaluate_gold.py', 'scripts/prepare_review_inputs.py']:
         files[name] = ROOT / name
     converted = []
     stems = set()
@@ -213,7 +217,7 @@ def build():
     manifest = {'schema': 1, 'owner': 'qutrnvinh3', 'privacy': 'PRIVATE',
                 'corpus_files': sum(n.startswith('data/') for n in files),
                 'converted_docs': converted, 'files': entries}
-    archive = DEST / 'vn_labor_kaggle.zip'
+    archive = DEST / 'vn_labor_kaggle_v8.zip'
     temporary = archive.with_suffix('.tmp')
     with zipfile.ZipFile(temporary, 'w', zipfile.ZIP_DEFLATED, compresslevel=1) as z:
         for name, p in sorted(files.items()):
@@ -223,12 +227,18 @@ def build():
         bad = z.testzip()
         if bad:
             raise RuntimeError(f'Bad ZIP member: {bad}')
-    temporary.replace(archive)
+    try:
+        temporary.replace(archive)
+    except PermissionError:
+        # A package created by another Windows identity may be locked/read-only.
+        # Preserve the new build instead of deleting or overwriting it.
+        archive = DEST / 'vn_labor_kaggle_v8_rebuilt.zip'
+        temporary.replace(archive)
     notebook = make_notebook()
     for i, cell in enumerate(notebook['cells']):
         if cell['cell_type'] == 'code':
             compile(''.join(cell['source']), f'cell-{i}', 'exec')
-    (DEST / 'VN_Labor_Kaggle.ipynb').write_text(json.dumps(notebook, ensure_ascii=False, indent=2), encoding='utf-8')
+    (DEST / 'VN_Labor_Kaggle_V8.ipynb').write_text(json.dumps(notebook, ensure_ascii=False, indent=2), encoding='utf-8')
     with archive.open('rb') as stream:
         archive_sha256 = hashlib.file_digest(stream, 'sha256').hexdigest()
     report = {'bundle': archive.name, 'sha256': archive_sha256,

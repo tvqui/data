@@ -35,8 +35,11 @@ def graph_parent_id(p: dict) -> str:
     return section_id or chapter_id or p["document_id"]
 
 
-def build_graph(registry, provisions, cases, issues, issue_edges, checklists, relation_edges, communities, output_dir: Path):
+def build_graph(registry, provisions, cases, issues, issue_edges, checklists, relation_edges, communities, output_dir: Path, provision_identities=None):
     nodes=[]; edges=[]
+    hierarchy_headings={r['id']:r for r in read_jsonl(output_dir/'03_structure/hierarchy_headings.jsonl')}
+    def heading_properties(nid):
+        return {k:v for k,v in hierarchy_headings.get(nid,{}).items() if k not in {'id','label','number','document_id'}}
     # Documents + AbstractLaw/Version layer. Legal documents are version/provenance-bearing
     # source nodes; AbstractLaw provides a stable timeless anchor for temporal retrieval.
     abstract_seen = {}
@@ -71,13 +74,15 @@ def build_graph(registry, provisions, cases, issues, issue_edges, checklists, re
             continue
         chapter_id,section_id=hierarchy_ids(p)
         if chapter_id and chapter_id not in hierarchy_seen:
-            nodes.append(node(chapter_id,"Chapter",number=p["chapter"],document_id=p["document_id"],layer="rule"))
+            nodes.append(node(chapter_id,"Chapter",number=p["chapter"],document_id=p["document_id"],
+                              layer="rule",**heading_properties(chapter_id)))
             edges.append(edge(chapter_id,p["document_id"],"PART_OF"))
             hierarchy_siblings.setdefault(p["document_id"],[]).append(chapter_id)
             hierarchy_seen.add(chapter_id)
         if section_id and section_id not in hierarchy_seen:
             parent_id=chapter_id or p["document_id"]
-            nodes.append(node(section_id,"Section",number=p["section"],chapter=p.get("chapter","") or "",document_id=p["document_id"],layer="rule"))
+            nodes.append(node(section_id,"Section",number=p["section"],chapter=p.get("chapter","") or "",
+                              document_id=p["document_id"],layer="rule",**heading_properties(section_id)))
             edges.append(edge(section_id,parent_id,"PART_OF"))
             hierarchy_siblings.setdefault(parent_id,[]).append(section_id)
             hierarchy_seen.add(section_id)
@@ -90,6 +95,10 @@ def build_graph(registry, provisions, cases, issues, issue_edges, checklists, re
         pp = dict(p); pp["layer"] = "rule"
         nodes.append(node(p["provision_id"], label, **pp))
         edges.append(edge(p["provision_id"],graph_parent_id(p),"PART_OF"))
+        if p.get("provision_identity_id"):
+            edges.append(edge(p["provision_identity_id"],p["provision_id"],"HAS_PROVISION_VERSION"))
+    for identity in provision_identities or []:
+        nodes.append(node(identity["provision_identity_id"],"ProvisionIdentity",layer="rule",**identity))
     # NEXT at each parent level.
     siblings={}
     for p in provisions: siblings.setdefault(graph_parent_id(p),[]).append(p)
@@ -107,13 +116,20 @@ def build_graph(registry, provisions, cases, issues, issue_edges, checklists, re
             edges.append(edge(c["case_id"],fid,"HAS_FEATURE"))
     # Issues
     for i in issues: nodes.append(node(i["issue_id"],"LegalIssue",layer="ontology",**i))
-    for e in issue_edges: edges.append(edge(e["source_id"],e["target_id"],e["type"],score=e.get("score"),evidence=e.get("evidence")))
+    for e in issue_edges: edges.append(edge(e["source_id"],e["target_id"],e["type"],score=e.get("score"),evidence=e.get("evidence"),
+                                             evidence_text=e.get("evidence_text"),evidence_span=e.get("evidence_span"),
+                                             provenance_status=e.get("provenance_status")))
     # Diagnostic checklist -> Rule Graph support
     for d in checklists:
-        nodes.append(node(d["checklist_id"],"DiagnosticItem",layer="rule",**d))
-        edges.append(edge(d["provision_id"],d["checklist_id"],"HAS_DIAGNOSTIC_ITEM",confidence=d.get("confidence")))
+        nodes.append(node(d["checklist_id"],"DiagnosticItem",layer="derived",**d))
+        edges.append(edge(d["provision_id"],d["checklist_id"],"HAS_DIAGNOSTIC_ITEM",confidence=d.get("confidence"),
+                          evidence_text=d.get("evidence_text"),evidence_span=d.get("evidence_span"),
+                          provenance_status=d.get("provenance_status")))
     # Legal/citation relations
-    for e in relation_edges: edges.append(edge(e["source_id"],e["target_id"],e["type"],confidence=e.get("confidence"),evidence=e.get("evidence"),method=e.get("method")))
+    for e in relation_edges: edges.append(edge(e["source_id"],e["target_id"],e["type"],confidence=e.get("confidence"),
+                                               evidence=e.get("evidence"),evidence_text=e.get("evidence_text"),
+                                               evidence_span=e.get("evidence_span"),evidence_status=e.get("evidence_status"),
+                                               resolution_scope=e.get("resolution_scope"),method=e.get("method")))
     # Communities / similar cases
     for c in communities.get("community_nodes",[]): nodes.append(node(c["id"],"Community",layer="ontology",**c))
     for e in communities.get("edges",[]): edges.append(edge(e["source"],e["target"],e["type"],**e.get("properties",{})))

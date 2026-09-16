@@ -14,6 +14,8 @@
 /artifacts/
 /kaggle_upload/
 /source_attachments/
+/review_inputs/
+/review_packages/
 
 # Secrets and local environment settings (keep the example)
 .env

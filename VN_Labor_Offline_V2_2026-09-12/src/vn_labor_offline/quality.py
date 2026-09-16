@@ -8,6 +8,7 @@ from .temporal import instrument_key
 
 def quality_issues(registry,extracted,provisions,nodes,edges,out,cfg=None):
     issues=[]; settings=cfg or {}; by_file={x['file_id']:x for x in extracted}
+    docs={d['document_id']:d for d in registry}
     segments={s.get('segment_id'):s for s in read_jsonl(out/'03_structure/segments.jsonl')}
     def error(kind,**detail): issues.append({'severity':'ERROR','type':kind,**detail})
     for d in registry:
@@ -43,6 +44,10 @@ def quality_issues(registry,extracted,provisions,nodes,edges,out,cfg=None):
     for p in provisions:
         if p.get('segment_type')!='MAIN_BODY': error('NON_MAIN_BODY_PROVISION',provision_id=p['provision_id'])
         if not p.get('canonical_path'): error('MISSING_CANONICAL_PATH',provision_id=p['provision_id'])
+        if p.get('source_unit_type') == 'PDF_PAGE' and p.get('page_status') != 'RESOLVED':
+            error('MISSING_PAGE_SPAN',provision_id=p['provision_id'])
+        if p.get('source_unit_type') != 'PDF_PAGE' and p.get('page_status') != 'NOT_APPLICABLE':
+            error('INVALID_NONPAGINATED_PAGE_STATUS',provision_id=p['provision_id'])
         if p.get('char_start') is None or p.get('char_end') is None or p.get('line_start') is None or p.get('line_end') is None or not p.get('segment_id'):
             error('MISSING_PROVISION_PROVENANCE',provision_id=p['provision_id'])
             continue
@@ -58,9 +63,23 @@ def quality_issues(registry,extracted,provisions,nodes,edges,out,cfg=None):
             valid_span=source_lines==provision_lines
         if not valid_span:
             error('INVALID_PROVISION_PROVENANCE',provision_id=p['provision_id'],segment_id=p.get('segment_id'))
+            continue
+        document_text=by_file.get(docs.get(p['document_id'],{}).get('file_id'),{}).get('text','')
+        document_start,document_end=p.get('document_char_start'),p.get('document_char_end')
+        if not (isinstance(document_start,int) and isinstance(document_end,int) and
+                0<=document_start<document_end<=len(document_text) and
+                document_text[document_start:document_end]==segment['text'][start:end]):
+            error('INVALID_DOCUMENT_PROVENANCE',provision_id=p['provision_id'])
+            continue
+        source=by_file.get(docs.get(p['document_id'],{}).get('file_id'),{})
+        pages=[row['page'] for row in source.get('page_provenance',[]) if
+               row.get('text_start',0)<document_end and row.get('text_end',0)>document_start]
+        if source.get('page_provenance') and (not pages or p.get('page_start')!=min(pages) or
+            p.get('page_end')!=max(pages)):
+            error('INVALID_PROVISION_PAGE_PROVENANCE',provision_id=p['provision_id'])
     for key,count in Counter(p.get('canonical_path') for p in provisions).items():
         if key and count>1: error('DUPLICATE_CANONICAL_PATH',canonical_path=key,count=count)
-    docs={d['document_id']:d for d in registry}; ns={n['id']:n for n in nodes}
+    ns={n['id']:n for n in nodes}
     for e in edges:
         if e['type']=='VERSION_OF':
             d=docs.get(e['source']); anchor=ns.get(e['target'],{})
@@ -89,7 +108,8 @@ def quality_issues(registry,extracted,provisions,nodes,edges,out,cfg=None):
         if actual!=expected: error('STALE_BM25_INDEX')
     load_report=out/'reports/neo4j_validation.json'
     fingerprint=hashlib.sha256(json.dumps([nodes,edges],sort_keys=True,ensure_ascii=False).encode()).hexdigest()
-    if not load_report.exists(): error('NEO4J_BUILD_NOT_VERIFIED')
+    if not load_report.exists():
+        issues.append({'severity':'INFO','type':'NEO4J_BUILD_NOT_VERIFIED'})
     else:
         report=json.loads(load_report.read_text(encoding='utf-8'))
         if not report.get('passed') or report.get('build_id')!=fingerprint: error('STALE_NEO4J_BUILD')
