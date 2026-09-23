@@ -14,7 +14,12 @@ def main():
     pn=sub.add_parser('load-neo4j'); pn.add_argument('--config',default='config/pipeline.yaml')
     pn.add_argument('--replace-legacy',action='store_true',help='Explicit migration: remove unowned Entity nodes in this dedicated database')
     pd=sub.add_parser('dense'); pd.add_argument('--config',default='config/pipeline.yaml')
+    ps=sub.add_parser('source-resolver')
+    ps.add_argument('resolver_args', nargs=argparse.REMAINDER)
     args=p.parse_args()
+    if args.cmd == 'source-resolver':
+        from .source_resolver.cli import main as resolver_main
+        raise SystemExit(resolver_main(args.resolver_args))
     cfg=resolve_paths(load_yaml(args.config),args.config)
     if args.cmd=='all':
         summary=run_all(cfg,args.mode); print(json.dumps(summary,ensure_ascii=False,indent=2))

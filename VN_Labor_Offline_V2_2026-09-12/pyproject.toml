@@ -19,6 +19,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+browser = [
+  "playwright>=1.50.0",
+]
 ocr = [
   "docling>=2.50.0",
   "easyocr>=1.7.2",
@@ -39,6 +42,11 @@ community = [
   "python-igraph>=0.11.8",
   "leidenalg>=0.10.2",
 ]
+online = [
+  "fastapi>=0.115.0",
+  "uvicorn>=0.34.0",
+  "httpx>=0.28.0",
+]
 full = [
   "docling>=2.50.0",
   "easyocr>=1.7.2",
@@ -50,14 +58,19 @@ full = [
   "ollama>=0.6.0",
   "python-igraph>=0.11.8",
   "leidenalg>=0.10.2",
+  "fastapi>=0.115.0",
+  "uvicorn>=0.34.0",
+  "httpx>=0.28.0",
 ]
 
 [project.scripts]
 vn-labor-offline = "vn_labor_offline.cli:main"
+vn-labor-source-resolver = "vn_labor_offline.source_resolver.cli:main"
+vn-labor-online = "vn_labor_online.cli:main"
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/vn_labor_offline"]
+packages = ["src/vn_labor_offline", "src/vn_labor_online"]

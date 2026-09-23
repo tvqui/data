@@ -8,21 +8,15 @@ Trạng thái ngày 16/09/2026: ZIP `vn_labor_results_v8.1(aura).zip` đã PASS 
 2. Khi cần đối chiếu, mở `artifacts/reports/final_outputs_validation.json`, `summary.json`, `neo4j_validation.json` trong ZIP V8.1. Graph build ID hiện tại là `7b33c8206124e32d423ddfc02adbf58ad26cce68e8ac0154329d51b5dd667d38`.
 3. Bản nháp để làm review nằm trong thư mục `review_inputs/v8_1` trên máy. Thư mục này được `.gitignore` vì có nội dung corpus; không push nó lên Git công khai. **Sửa file nháp không làm pipeline đổi kết quả** cho đến khi review record được tích hợp vào config/artifacts và chạy lại những stage phụ thuộc.
 
-## Bước 1 — Tìm và ghi nguồn của 95 tài liệu
+## Bước 1 — Tự động tìm và kiểm nguồn của 95 tài liệu
 
-Nếu giao bước này cho người khác, dùng [tài liệu bàn giao chi tiết](SOURCE_REVIEW_HANDOFF_V8_1.md) và gửi file Private `review_packages/source_review_handoff_v8_1_full.zip`. Gói có bảng CSV 95 dòng và đúng 95 file corpus để đối chiếu; người thu thập chỉ sửa CSV, không sửa YAML/config trực tiếp.
+Không thực hiện mặc định bằng cách một người tự Google, bấm từng trang rồi copy 95 URL. Triển khai [Automatic Legal Source Resolver](AUTOMATIC_LEGAL_SOURCE_RESOLVER_PLAN.md): adapter VBPL/Công báo/Chính phủ/Tòa án thử URL và `ItemID` hiện có trước; HTTP parser rồi Playwright xử lý trang cần JavaScript/nút “Xem”; official-site search và SearXNG chỉ là fallback. Crawl4AI là extractor tùy chọn, còn Browser-use chỉ tạo candidate ở bước cuối và không được tự phê duyệt.
 
-1. Trong VS Code, mở `review_inputs/v8_1/source_catalog_review_draft.yaml`. Tìm một mục `legal_corpus/...`; đường dẫn file gốc tương ứng bắt đầu từ `data/`. Mỗi mục đã có SHA-256 và đôi khi có `candidate_source_url`.
-2. Lấy số/ký hiệu văn bản từ tên file hoặc `config/source_catalog.yaml`, rồi tìm đúng trang và bản gốc trên [Cơ sở dữ liệu quốc gia về văn bản pháp luật](https://vbpl.vn/Pages/vbpq-timkiem.aspx), [Công báo điện tử](https://congbao.chinhphu.vn/tim-kiem-van-ban.htm) hoặc [Hệ thống văn bản Chính phủ](https://vanban.chinhphu.vn/). Đây là nơi **tìm candidate**, không có nghĩa URL nào tự động khớp file hiện có.
-3. Mở tài liệu nguồn và file trong `data/` để đối chiếu số văn bản, tên, số trang/nội dung, bản đính kèm. Nếu trùng, ghi các trường ở đoạn tiếp theo vào **file nháp**; nếu không trùng, ghi `DIFFERENT_FILE` vào `review_note` và để DRAFT.
+Resolver phải lưu URL yêu cầu/final, redirect, snapshot, metadata, tệp tải, SHA-256 và lý do quyết định. Chỉ nguồn chính thức có identity khớp và tệp tải **khớp đúng SHA corpus** mới nhận `AUTO_EXACT_SHA`. SHA khác, redirect về homepage, nhiều candidate, thiếu metadata hoặc nguồn thứ cấp phải vào `NEEDS_REVIEW`/`BLOCKED`; hệ thống không tự thay file corpus.
 
-Với từng file, ghi vào bản nháp: URL của **đúng tài liệu/bản tải**, tên cơ quan cung cấp (`source_provider`), ngày bạn thực sự thu thập/tải file (`collected_at`, dạng `YYYY-MM-DD`), cách kiểm bản nguồn (`review_evidence`), và SHA của file đang trong corpus. URL phải là HTTPS. Đừng điền một ngày thu thập ước đoán cho file đã tải từ trước; nếu thiếu nhật ký, giữ bản cũ `UNVERIFIED` hoặc tải lại từ nguồn chính thức, ghi ngày mới và chấp nhận SHA/corpus thay đổi.
+Tách kết quả thành hai gate: `AUTO_EXACT_SHA` có thể qua **provenance kỹ thuật**, còn hiệu lực, phạm vi sửa đổi, bản hợp nhất và Gold vẫn cần **review pháp lý**. Không ghi tên reviewer giả và không đổi `AUTO_RESOLVED` thành `APPROVED`. Dùng SQLite cho hàng đợi/trạng thái và xuất JSONL/CSV để xem diff; `config/source_catalog.yaml` chỉ được cập nhật bằng lệnh merge có dry-run sau khi rule/provider registry đã được kiểm tra.
 
-Đối chiếu số văn bản, tên, loại văn bản, trang/tệp đính kèm và nội dung với file gốc. Nếu file chính thức khác file đang có, ghi rõ `DIFFERENT_FILE` trong ghi chú và giữ ở DRAFT; quyết định thay file sẽ làm cần chạy lại extraction/structure/indexes. Ưu tiên 61 nguồn legal/consolidated đang thiếu xác minh authority; gate hiện tại cũng kiểm đủ cả 95 catalog records.
-
-Sau khi có người kiểm chứng, chuyển **từng record được duyệt** vào mục tương ứng trong `config/source_catalog.yaml`, giữ metadata đang có và bổ sung `sha256`, `source_provider`, `source_url`, `collected_at`, `official_source: true` cho legal/consolidated, `metadata_verified: true`, `reviewer`, `reviewed_at` và `review_evidence`. Với judicial/supplementary, `official_source` phụ thuộc nguồn thực tế; đừng đặt true chỉ để qua gate. `reviewed_at` phải không trước `collected_at`. Code chỉ kiểm trường và SHA; tính đúng của URL và thẩm quyền nguồn phải do người đọc đối chiếu.
-
-**Nếu chưa có reviewer:** chỉ điền candidate và bằng chứng, giữ `metadata_verified: false`/DRAFT. Không điền tên reviewer hoặc đổi `UNVERIFIED` thành `VERIFIED` thay người khác.
+Gói [bàn giao nguồn](SOURCE_REVIEW_HANDOFF_V8_1.md) và `review_packages/source_review_handoff_v8_1_full.zip` được giữ làm **gói xử lý ngoại lệ**. Chỉ gửi cho người khác những dòng resolver trả `NEEDS_REVIEW`/`BLOCKED`, kèm candidate và bằng chứng đã thu thập; người review không phải tìm lại các hồ sơ `AUTO_EXACT_SHA` từ đầu. Trong thời gian resolver chưa được triển khai xong, bảng CSV/YAML hiện có vẫn là bản nháp và không làm thay đổi pipeline.
 
 ## Bước 2 — Duyệt 25 thay đổi pháp lý và hiệu lực cấp provision
 
@@ -60,9 +54,10 @@ Khi candidate cuối đã đạt và graph size phù hợp instance, chuyển ch
 
 ## Việc bạn nên làm ngay nếu chưa có reviewer
 
-1. Giữ ZIP V8.1 và mở `review_inputs/v8_1/source_catalog_review_draft.yaml`.
-2. Tìm URL/tệp chính thức cho từng văn bản, ghi lại **URL chính xác, ngày tải thực, cơ quan cung cấp và ghi chú SHA/khác biệt**. Làm 5–10 văn bản đầu để quen cách đối chiếu rồi tiếp tục 95 record.
-3. Tập hợp danh sách người có thể review pháp lý độc lập trước khi chuyển bất kỳ record nào sang APPROVED. Có thể nhờ người am hiểu luật lao động và văn bản quy phạm pháp luật; code hiện chỉ kiểm có `reviewer`, còn năng lực và sự độc lập phải do bạn đánh giá.
-4. Gửi cho tôi bản nháp nguồn và các câu hỏi về target/ngày còn khó; tôi có thể kiểm dữ liệu, sửa code/gói Kaggle, tạo báo cáo candidate. Chúng vẫn ở DRAFT cho đến khi có người duyệt.
+1. Giữ ZIP V8.1 làm checkpoint và chưa chạy lại pipeline.
+2. Triển khai P0/P1 trong [kế hoạch resolver](AUTOMATIC_LEGAL_SOURCE_RESOLVER_PLAN.md): provider registry, fixture, evidence store và ba adapter VBPL/Công báo/Chính phủ.
+3. Chạy dry-run resolver trên 61 legal/consolidated records có URL ứng viên; không sửa `config/source_catalog.yaml` và không thay corpus trong lần đầu.
+4. Kiểm mẫu các dòng `AUTO_EXACT_SHA`, rồi gửi riêng queue `NEEDS_REVIEW`/`BLOCKED` cùng gói corpus Private cho người hỗ trợ. Chỉ bước review pháp lý mới cần người có chuyên môn.
+5. Sau khi resolver ổn định, tách gate provenance kỹ thuật khỏi gate pháp lý; merge kết quả bằng diff có thể hoàn tác rồi mới chạy lại các stage phụ thuộc.
 
 Không cần gửi Neo4j password hoặc Kaggle Secrets cho bước review này. Không cần chạy lại toàn pipeline khi mới chỉ điền nháp.
